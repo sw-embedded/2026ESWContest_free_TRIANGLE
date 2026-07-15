@@ -216,3 +216,28 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 개인 환경 설정
+.env
+config/local.yaml
+
+# 실행 결과
+outputs/
+logs/
+*.log
+
+# 촬영 데이터
+data/raw/
+recordings/
+*.mp4
+*.avi
+
+# 개발 환경
+.venv/
+venv/
+.vscode/
+.idea/
+
+# 운영체제
+.DS_Store
+Thumbs.db

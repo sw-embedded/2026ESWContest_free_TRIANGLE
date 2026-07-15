@@ -1,0 +1,11 @@
+camera:
+  sample_interval_sec: 10
+
+posture:
+  bad_duration_sec: 300
+
+warning:
+  duration_sec: 10
+
+actuator:
+  motor_run_sec: 30
