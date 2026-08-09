@@ -48,7 +48,25 @@ Arduino Uno R3가 Raspberry Pi의 USB 시리얼 명령을 받아 다음 장치�
 
 ## 시리얼 명령
 
-115200 baud, 줄바꿈(`\n`)으로 명령을 끝냅니다.
+9600 baud, 줄바꿈(`\n`)으로 명령을 끝냅니다. Raspberry Pi의
+`src/main.py`가 보내는 한 글자 명령을 기본 연동 규격으로 사용합니다.
+
+| Raspberry Pi 명령 | 응답 | 동작 |
+|---|---|---|
+| `A` | `OK A` | `AUTO_TILT_TARGET_MM` 위치로 자세 교정 동작 시작 |
+| `S` | `OK S` | 모든 모터 즉시 정지 |
+
+`A`는 이동량을 포함하지 않으므로 펌웨어의 `AUTO_TILT_TARGET_MM` 값으로
+목표 위치를 정합니다. 리미트 스위치가 없는 현재 버전에서는 전원을 켠 뒤
+반드시 안전한 기준 위치에서 `SET_ZERO`를 먼저 실행해야 합니다. 기준점이
+설정되지 않았다면 `A`에 `ERR TILT_ZERO_NOT_SET`으로 응답하고 움직이지 않습니다.
+이미 목표 위치라면 `DONE A`를 반환합니다. 이동을 시작하면 `OK A`를 먼저
+반환하고, 목표 도달 시 `TILT_STOP TARGET`과 `DONE TILT`를 차례로 출력합니다.
+이동 중 `S`를 받으면 정지 이벤트(`TILT_STOP COMMAND` 또는
+`HEIGHT_STOP COMMAND`) 다음에 `OK S`를 출력합니다.
+
+아래의 기존 진단 및 수동 제어 명령도 같은 9600 baud 줄 단위 형식으로
+계속 사용할 수 있습니다.
 
 | 명령 | 예시 | 의미 |
 |---|---|---|
@@ -72,7 +90,7 @@ Arduino Uno R3가 Raspberry Pi의 USB 시리얼 명령을 받아 다음 장치�
 ## 첫 무부하 테스트 순서
 
 1. 12 V 모터 전원을 빼고 Arduino만 USB로 연결합니다.
-2. Arduino IDE의 시리얼 모니터를 `115200 baud`, 줄바꿈으로 설정합니다.
+2. Arduino IDE의 시리얼 모니터를 `9600 baud`, 줄바꿈으로 설정합니다.
 3. `STATUS`를 보내 `TILT_ZERO_SET=0`인지 확인합니다.
 4. 모터와 기구를 분리한 상태에서 A4988 전류 제한을 설정합니다.
 5. 리드스크루 너트를 양 끝에서 충분히 떨어진 위치에 둔 뒤 12 V 전원을 연결합니다.
@@ -86,6 +104,7 @@ Arduino Uno R3가 Raspberry Pi의 USB 시리얼 명령을 받아 다음 장치�
 스케치 상단의 다음 값을 실제 기구에 맞게 조정합니다.
 
 - `TILT_UP_DIR_LEVEL`: 실제 상승 방향
+- `AUTO_TILT_TARGET_MM`: Raspberry Pi의 `A` 명령에 사용할 자동 교정 목표 위치
 - `TILT_MAX_TRAVEL_MM`: 수동 0점부터 허용할 안전 이동 거리
 - `TILT_SPEED_MM_PER_SEC`: 탈조가 없는 속도
 - `ACTUATOR_MAX_RUN_MS`: 한 번에 허용할 최대 구동 시간

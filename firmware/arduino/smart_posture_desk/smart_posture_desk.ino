@@ -6,7 +6,7 @@
  *   - A4988 + NEMA17 17HS3401S-T8x8 (T8 리드스크루, 회전당 8mm 이동)
  *   - L298N + 12V 리니어 액추에이터
  *
- * 라즈베리파이 통신: USB 시리얼, 115200 baud, 줄바꿈 문자로 명령 종료
+ * 라즈베리파이 통신: USB 시리얼, 9600 baud, 줄바꿈 문자로 명령 종료
  * 배선하거나 시험하기 전에 같은 폴더의 README.md를 확인할 것
  */
 
@@ -44,6 +44,10 @@ const uint8_t TILT_UP_DIR_LEVEL = HIGH;
 // 실제 기구의 이동 가능 거리를 측정하고, 처음 시험할 때는 훨씬 작은 값부터 사용한다.
 const float TILT_MAX_TRAVEL_MM = 100.0f;
 const float TILT_SPEED_MM_PER_SEC = 4.0f;
+
+// src/main.py sends A without a distance, so keep its correction target in one
+// configurable constant. Calibrate this conservatively for the real mechanism.
+const float AUTO_TILT_TARGET_MM = 5.0f;
 
 // 정격 속도 기준 전체 스트로크 작동시간: 100mm / 9.5mm/s = 10,526.32ms
 // 이론상 100mm 이동이 중간에 끊기지 않도록 밀리초 단위에서 올림한다.
@@ -164,7 +168,8 @@ void setTiltZero() {
   Serial.println(F("OK SET_ZERO"));
 }
 
-void startTiltMoveMm(float targetMm) {
+void startTiltMoveMm(float targetMm,
+                     const __FlashStringHelper *acceptedCommand) {
   if (!tiltZeroSet) {
     Serial.println(F("ERR TILT_ZERO_NOT_SET"));
     return;
@@ -180,7 +185,8 @@ void startTiltMoveMm(float targetMm) {
 
   tiltTargetSteps = mmToSteps(targetMm);
   if (tiltTargetSteps == tiltPositionSteps) {
-    Serial.println(F("DONE TILT"));
+    Serial.print(F("DONE "));
+    Serial.println(acceptedCommand);
     return;
   }
 
@@ -193,7 +199,8 @@ void startTiltMoveMm(float targetMm) {
   tiltMotionStartedMs = millis();
   lastTiltStepUs = micros();
   enableStepper(true);
-  Serial.println(F("OK TILT"));
+  Serial.print(F("OK "));
+  Serial.println(acceptedCommand);
 }
 
 void updateTilt() {
@@ -280,6 +287,19 @@ void handleCommand(char *line) {
   uppercase(command);
   lastValidCommandMs = millis();
 
+  // Raspberry Pi src/main.py compatibility: "A\n" starts correction and
+  // "S\n" stops all motion.
+  if (strcmp(command, "A") == 0) {
+    startTiltMoveMm(AUTO_TILT_TARGET_MM, F("A"));
+    return;
+  }
+
+  if (strcmp(command, "S") == 0) {
+    stopAll(F("COMMAND"));
+    Serial.println(F("OK S"));
+    return;
+  }
+
   if (strcmp(command, "STOP") == 0) {
     stopAll(F("COMMAND"));
     Serial.println(F("OK STOP"));
@@ -318,7 +338,7 @@ void handleCommand(char *line) {
       Serial.println(F("ERR TILT_ARGUMENT"));
       return;
     }
-    startTiltMoveMm(targetMm);
+    startTiltMoveMm(targetMm, F("TILT"));
     return;
   }
 
@@ -334,7 +354,7 @@ void handleCommand(char *line) {
       Serial.println(F("ERR TILT_REL_ARGUMENT"));
       return;
     }
-    startTiltMoveMm(stepsToMm(tiltPositionSteps) + deltaMm);
+    startTiltMoveMm(stepsToMm(tiltPositionSteps) + deltaMm, F("TILT"));
     return;
   }
 
@@ -402,7 +422,7 @@ void setup() {
   enableStepper(false);
   stopHeight(F("BOOT"));
 
-  Serial.begin(115200);
+  Serial.begin(9600);
   lastValidCommandMs = millis();
   Serial.println(F("READY SMART_POSTURE_DESK_V2_NO_LIMITS"));
   Serial.println(F("INFO SEND_SET_ZERO_BEFORE_TILT"));
