@@ -5,22 +5,21 @@ import time
 import serial
 
 # ==========================================
-# 1. 아두이노 시리얼 통신 설정 (Hardware 연동용)
+# 1. 아두이노 시리얼 통신 설정 (Hardware 연동)
 # ==========================================
-# 라즈베리파이 USB 포트 연결 기준 (필요 시 포트명 변경, 예: '/dev/ttyACM0')
 try:
     ser = serial.Serial('/dev/ttyUSB0', 9600, timeout=1)
-    time.sleep(2)  # 시리얼 초기화 대기
+    time.sleep(2)
     print("아두이노 시리얼 통신 연결 성공")
 except Exception as e:
-    print(f"시리얼 통신 연결 실패 (가상 테스트 모드 진행): {e}")
+    print(f"시리얼 통신 연결 실패 (가상 테스트 모드): {e}")
     ser = None
 
 def send_arduino_command(cmd):
-    """아두이노로 모터 제어/경고 명령 전송 (S: 정지, A: 각도조절, H: 높이조절, W: 경고)"""
+    """아두이노로 제어 명령 전송"""
     if ser and ser.is_open:
         ser.write(f"{cmd}\n".encode('utf-8'))
-        print(f"[SERIAL OUT] 아두이노 명령 전송: {cmd}")
+        print(f"[SERIAL OUT] 명령 전송: {cmd}")
 
 # ==========================================
 # 2. MediaPipe Pose 및 기본 변수 설정
@@ -28,7 +27,7 @@ def send_arduino_command(cmd):
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 
-# Raspberry Pi 2 성능 최적화를 위한 설정 (model_complexity=0 사용)
+# 라즈베리파이 2 최적화 (model_complexity=0)
 pose = mp_pose.Pose(
     static_image_mode=False,
     model_complexity=0,
@@ -37,11 +36,12 @@ pose = mp_pose.Pose(
     min_tracking_confidence=0.5
 )
 
-def calculate_angle(p1, p2):
-    """두 점 사이의 기울기 각도(도) 계산"""
-    x1, y1 = p1
-    x2, y2 = p2
-    angle_rad = math.atan2(abs(y2 - y1), abs(x2 - x1))
+def calculate_vertical_angle(p1, p2):
+    """두 점 p1(상체쪽), p2(하체쪽) 간 수직선 기준 기울기 각도(도) 계산"""
+    dx = p1[0] - p2[0]
+    dy = p1[1] - p2[1]
+    # 수직선(y축) 대비 수평 기울기 각도 계산
+    angle_rad = math.atan2(abs(dx), abs(dy))
     return math.degrees(angle_rad)
 
 # 지속 시간 측정 변수 (5분 = 300초)
@@ -49,9 +49,8 @@ BAD_POSTURE_THRESHOLD_SEC = 300
 bad_posture_start_time = None
 alert_triggered = False
 
-# 웹캠 / 라즈베리파이 카메라 연결
+# 카메라 설정 (320x240 해상도 낮춤)
 cap = cv2.VideoCapture(0)
-# 연산 부하 감소를 위해 해상도를 320x240으로 낮춤 (라즈베리파이 2 권장)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
@@ -70,14 +69,15 @@ while cap.isOpened():
     # MediaPipe 좌표 추출
     results = pose.process(rgb_frame)
     
+    # 기본 상태: NORMAL
     current_status = "NORMAL"
-    status_color = (0, 255, 0) # 정상: 초록색
+    status_color = (0, 255, 0) # 초록색
 
     if results.pose_landmarks:
         landmarks = results.pose_landmarks.landmark
         
         # ------------------------------------------
-        # 깃허브 명세에 따른 6개 주요 좌표 추출 (측면 기준: 오른쪽)
+        # 1. 6개 주요 좌표 추출 (측면 기준: 오른쪽)
         # ------------------------------------------
         ear = (int(landmarks[mp_pose.PoseLandmark.RIGHT_EAR].x * w),
                int(landmarks[mp_pose.PoseLandmark.RIGHT_EAR].y * h))
@@ -93,53 +93,59 @@ while cap.isOpened():
                 int(landmarks[mp_pose.PoseLandmark.RIGHT_KNEE].y * h))
 
         # ------------------------------------------
-        # 자세 판정 알고리즘 (전방 숙임 판정)
+        # 2. 체크리스트 요구사항 알고리즘 적용
         # ------------------------------------------
-        neck_angle = calculate_angle(ear, shoulder)
-        back_angle = calculate_angle(shoulder, hip)
+        # (1) 거북목 판단: 귀-어깨 기울기 각도 (기준치: 15도 이상 앞으로 쏠림)
+        neck_angle = calculate_vertical_angle(ear, shoulder)
         
-        # 귀-어깨 각도 또는 어깨-골반 기울기가 기준치 미만이면 전방 숙임 자세로 판단
-        if neck_angle < 45 or back_angle < 60:
-            current_status = "FORWARD_HEAD" # 전방 숙임 (나쁜 자세)
+        # (2) 허리 굽음 판단: 어깨-골반 기울기 각도 (기준치: 20도 이상 숙여짐)
+        back_angle = calculate_vertical_angle(shoulder, hip)
+        
+        # 상태 지정 (TURTLE_NECK, BENT_BACK, NORMAL)
+        if neck_angle > 15:
+            current_status = "TURTLE_NECK"
             status_color = (0, 0, 255) # 빨간색
+        elif back_angle > 20:
+            current_status = "BENT_BACK"
+            status_color = (0, 165, 255) # 주황색
 
-        # 6개 주요 좌표 시각화 (파란색 점)
+        # 6개 좌표 점 시각화
         for pt in [ear, eye, nose, shoulder, hip, knee]:
             cv2.circle(frame, pt, 4, (255, 0, 0), -1)
 
         # ------------------------------------------
-        # 지속 시간 측정 및 5분 경고/모터 제어 로직
+        # 3. 나쁜 자세 지속 시간 및 경고 관리
         # ------------------------------------------
-        if current_status == "FORWARD_HEAD":
+        if current_status in ["TURTLE_NECK", "BENT_BACK"]:
             if bad_posture_start_time is None:
                 bad_posture_start_time = time.time()
             
             elapsed_time = int(time.time() - bad_posture_start_time)
             
-            # 5분(300초) 이상 지속 처리
+            # 5분 이상 지속 시 동작
             if elapsed_time >= BAD_POSTURE_THRESHOLD_SEC and not alert_triggered:
-                print("[ALERT] 나쁜 자세 5분 이상 지속! 경고 및 책상 조절 명령을 전송합니다.")
-                send_arduino_command('A') # 'A': 책상 각도/높이 조절 명령
+                print(f"[ALERT] {current_status} 5분 이상 지속! 모터 구동 명령 전송")
+                send_arduino_command('A') # 'A': 책상 각도/높이 조절
                 alert_triggered = True
                 
-            # 화면에 지속 시간 표시
-            cv2.putText(frame, f"Bad Posture: {elapsed_time}s / {BAD_POSTURE_THRESHOLD_SEC}s", 
+            # 지속 시간 표시
+            cv2.putText(frame, f"Bad Time: {elapsed_time}s / {BAD_POSTURE_THRESHOLD_SEC}s", 
                         (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         else:
-            # 자세가 다시 정상이 되면 타이머 리셋
+            # NORMAL 복귀 시 타이머 초기화
             bad_posture_start_time = None
             if alert_triggered:
-                print("[INFO] 자세 정상 복귀. 시스템 정지 상태 전달.")
-                send_arduino_command('S') # 'S': 정지 명령
+                send_arduino_command('S') # 'S': 정지
                 alert_triggered = False
 
-    # 화면에 현재 자세 상태 출력
+    # ------------------------------------------
+    # 4. 화면(OpenCV 창)에 텍스트 출력 (체크리스트 요구사항)
+    # ------------------------------------------
     cv2.putText(frame, f"STATUS: {current_status}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
 
-    cv2.imshow("Raspberry Pi 2 - Posture Control System", frame)
+    cv2.imshow("Raspberry Pi AI Posture Detection", frame)
 
-    # 'q' 키 누르면 종료
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
