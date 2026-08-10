@@ -3,9 +3,33 @@ import mediapipe as mp
 import math
 import time
 import serial
+import threading
+from datetime import datetime
+
+# 팀원이 작성한 server.py 모듈 임포트
+from ui.server import start_server
 
 # ==========================================
-# 1. 아두이노 시리얼 통신 설정 (Hardware 연동)
+# 1. 웹 서버에 공유할 데이터를 담는 객체
+# ==========================================
+class PoseController:
+    def __init__(self):
+        self.current_status = {
+            "pose": "NORMAL",
+            "neck_angle": 0,
+            "back_angle": 0,
+            "updated_time": "-"
+        }
+
+controller = PoseController()
+
+# 웹 서버를 백그라운드 스레드로 실행
+server_thread = threading.Thread(target=start_server, args=(controller,), daemon=True)
+server_thread.start()
+print("웹 모니터링 서버가 백그라운드에서 실행되었습니다. (port 5000)")
+
+# ==========================================
+# 2. 아두이노 시리얼 통신 설정
 # ==========================================
 try:
     ser = serial.Serial('/dev/ttyUSB0', 9600, timeout=1)
@@ -16,18 +40,14 @@ except Exception as e:
     ser = None
 
 def send_arduino_command(cmd):
-    """아두이노로 제어 명령 전송"""
     if ser and ser.is_open:
         ser.write(f"{cmd}\n".encode('utf-8'))
         print(f"[SERIAL OUT] 명령 전송: {cmd}")
 
 # ==========================================
-# 2. MediaPipe Pose 및 기본 변수 설정
+# 3. MediaPipe Pose 및 기본 변수 설정
 # ==========================================
 mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
-
-# 라즈베리파이 2 최적화 (model_complexity=0)
 pose = mp_pose.Pose(
     static_image_mode=False,
     model_complexity=0,
@@ -37,110 +57,88 @@ pose = mp_pose.Pose(
 )
 
 def calculate_vertical_angle(p1, p2):
-    """두 점 p1(상체쪽), p2(하체쪽) 간 수직선 기준 기울기 각도(도) 계산"""
     dx = p1[0] - p2[0]
     dy = p1[1] - p2[1]
-    # 수직선(y축) 대비 수평 기울기 각도 계산
     angle_rad = math.atan2(abs(dx), abs(dy))
-    return math.degrees(angle_rad)
+    return round(math.degrees(angle_rad), 1)
 
 # 지속 시간 측정 변수 (5분 = 300초)
 BAD_POSTURE_THRESHOLD_SEC = 300  
 bad_posture_start_time = None
 alert_triggered = False
 
-# 카메라 설정 (320x240 해상도 낮춤)
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
-print("=== 라즈베리파이 자세 감지 및 구동 시스템 시작 ===")
+print("=== 라즈베리파이 AI 자세 감지 및 웹 모니터링 시작 ===")
 
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
-        print("카메라 영상을 읽을 수 없습니다.")
         break
 
     frame = cv2.flip(frame, 1)
     h, w, _ = frame.shape
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
-    # MediaPipe 좌표 추출
     results = pose.process(rgb_frame)
     
-    # 기본 상태: NORMAL
     current_status = "NORMAL"
-    status_color = (0, 255, 0) # 초록색
+    status_color = (0, 255, 0)
+    neck_angle = 0.0
+    back_angle = 0.0
 
     if results.pose_landmarks:
         landmarks = results.pose_landmarks.landmark
         
-        # ------------------------------------------
-        # 1. 6개 주요 좌표 추출 (측면 기준: 오른쪽)
-        # ------------------------------------------
+        # 6개 주요 좌표 추출 (오른쪽 측면)
         ear = (int(landmarks[mp_pose.PoseLandmark.RIGHT_EAR].x * w),
                int(landmarks[mp_pose.PoseLandmark.RIGHT_EAR].y * h))
-        eye = (int(landmarks[mp_pose.PoseLandmark.RIGHT_EYE].x * w),
-               int(landmarks[mp_pose.PoseLandmark.RIGHT_EYE].y * h))
-        nose = (int(landmarks[mp_pose.PoseLandmark.RIGHT_NOSE].x * w),
-                int(landmarks[mp_pose.PoseLandmark.RIGHT_NOSE].y * h))
         shoulder = (int(landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].x * w),
                     int(landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].y * h))
         hip = (int(landmarks[mp_pose.PoseLandmark.RIGHT_HIP].x * w),
                int(landmarks[mp_pose.PoseLandmark.RIGHT_HIP].y * h))
-        knee = (int(landmarks[mp_pose.PoseLandmark.RIGHT_KNEE].x * w),
-                int(landmarks[mp_pose.PoseLandmark.RIGHT_KNEE].y * h))
 
-        # ------------------------------------------
-        # 2. 체크리스트 요구사항 알고리즘 적용
-        # ------------------------------------------
-        # (1) 거북목 판단: 귀-어깨 기울기 각도 (기준치: 15도 이상 앞으로 쏠림)
+        # 각도 계산
         neck_angle = calculate_vertical_angle(ear, shoulder)
-        
-        # (2) 허리 굽음 판단: 어깨-골반 기울기 각도 (기준치: 20도 이상 숙여짐)
         back_angle = calculate_vertical_angle(shoulder, hip)
         
-        # 상태 지정 (TURTLE_NECK, BENT_BACK, NORMAL)
+        # 자세 판단
         if neck_angle > 15:
             current_status = "TURTLE_NECK"
-            status_color = (0, 0, 255) # 빨간색
+            status_color = (0, 0, 255)
         elif back_angle > 20:
             current_status = "BENT_BACK"
-            status_color = (0, 165, 255) # 주황색
-
-        # 6개 좌표 점 시각화
-        for pt in [ear, eye, nose, shoulder, hip, knee]:
-            cv2.circle(frame, pt, 4, (255, 0, 0), -1)
+            status_color = (0, 165, 255)
 
         # ------------------------------------------
-        # 3. 나쁜 자세 지속 시간 및 경고 관리
+        # 4. 팀원의 server.py로 실시간 데이터 송출
         # ------------------------------------------
+        controller.current_status = {
+            "pose": current_status,
+            "neck_angle": neck_angle,
+            "back_angle": back_angle,
+            "updated_time": datetime.now().strftime("%H:%M:%S")
+        }
+
+        # 나쁜 자세 5분 타이머 및 시리얼 전송
         if current_status in ["TURTLE_NECK", "BENT_BACK"]:
             if bad_posture_start_time is None:
                 bad_posture_start_time = time.time()
             
             elapsed_time = int(time.time() - bad_posture_start_time)
             
-            # 5분 이상 지속 시 동작
             if elapsed_time >= BAD_POSTURE_THRESHOLD_SEC and not alert_triggered:
-                print(f"[ALERT] {current_status} 5분 이상 지속! 모터 구동 명령 전송")
-                send_arduino_command('A') # 'A': 책상 각도/높이 조절
+                send_arduino_command('A')  # 아두이노 동작 신호
                 alert_triggered = True
-                
-            # 지속 시간 표시
-            cv2.putText(frame, f"Bad Time: {elapsed_time}s / {BAD_POSTURE_THRESHOLD_SEC}s", 
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         else:
-            # NORMAL 복귀 시 타이머 초기화
             bad_posture_start_time = None
             if alert_triggered:
-                send_arduino_command('S') # 'S': 정지
+                send_arduino_command('S')  # 정지 신호
                 alert_triggered = False
 
-    # ------------------------------------------
-    # 4. 화면(OpenCV 창)에 텍스트 출력 (체크리스트 요구사항)
-    # ------------------------------------------
+    # 화면에 텍스트 표시
     cv2.putText(frame, f"STATUS: {current_status}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
 
