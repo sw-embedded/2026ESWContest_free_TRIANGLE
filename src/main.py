@@ -6,7 +6,7 @@ import serial
 import threading
 from datetime import datetime
 
-# 팀원이 작성한 server.py 모듈 임포트
+# server.py 모듈 임포트
 from ui.server import start_server
 
 # ==========================================
