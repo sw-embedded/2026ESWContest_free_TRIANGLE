@@ -39,10 +39,44 @@ except Exception as e:
     print(f"시리얼 통신 연결 실패 (가상 테스트 모드): {e}")
     ser = None
 
-def send_arduino_command(cmd):
+VALID_ARDUINO_COMMANDS = {"N", "W", "C", "H"}
+HEARTBEAT_INTERVAL_SEC = 1.0
+last_heartbeat_time = 0.0
+last_posture_command = None
+
+
+def send_arduino_command(cmd, log_output=True):
+    """N/W/C/H 명령을 줄바꿈으로 종료해 아두이노로 전송한다."""
+    if cmd not in VALID_ARDUINO_COMMANDS:
+        raise ValueError(f"지원하지 않는 아두이노 명령: {cmd}")
+
     if ser and ser.is_open:
-        ser.write(f"{cmd}\n".encode('utf-8'))
-        print(f"[SERIAL OUT] 명령 전송: {cmd}")
+        try:
+            ser.write(f"{cmd}\n".encode("ascii"))
+            if log_output:
+                print(f"[SERIAL OUT] 명령 전송: {cmd}")
+            return True
+        except serial.SerialException as e:
+            print(f"[SERIAL ERROR] 명령 전송 실패: {e}")
+    return False
+
+
+def send_posture_command(cmd):
+    """자세 상태가 바뀔 때만 N/W/C 명령을 전송한다."""
+    global last_posture_command
+
+    if cmd != last_posture_command and send_arduino_command(cmd):
+        last_posture_command = cmd
+
+
+def send_heartbeat_if_due():
+    """Arduino의 3초 watchdog보다 짧은 1초 주기로 H를 전송한다."""
+    global last_heartbeat_time
+
+    now = time.monotonic()
+    if now - last_heartbeat_time >= HEARTBEAT_INTERVAL_SEC:
+        if send_arduino_command("H", log_output=False):
+            last_heartbeat_time = now
 
 # ==========================================
 # 3. MediaPipe Pose 및 기본 변수 설정
@@ -63,17 +97,19 @@ def calculate_vertical_angle(p1, p2):
     return round(math.degrees(angle_rad), 1)
 
 # 지속 시간 측정 변수 (5분 = 300초)
-BAD_POSTURE_THRESHOLD_SEC = 300  
+BAD_POSTURE_THRESHOLD_SEC = 300
 bad_posture_start_time = None
-alert_triggered = False
 
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
 print("=== 라즈베리파이 AI 자세 감지 및 웹 모니터링 시작 ===")
+send_posture_command("N")
 
 while cap.isOpened():
+    send_heartbeat_if_due()
+
     ret, frame = cap.read()
     if not ret:
         break
@@ -125,18 +161,26 @@ while cap.isOpened():
         # 나쁜 자세 5분 타이머 및 시리얼 전송
         if current_status in ["TURTLE_NECK", "BENT_BACK"]:
             if bad_posture_start_time is None:
-                bad_posture_start_time = time.time()
-            
-            elapsed_time = int(time.time() - bad_posture_start_time)
-            
-            if elapsed_time >= BAD_POSTURE_THRESHOLD_SEC and not alert_triggered:
-                send_arduino_command('A')  # 아두이노 동작 신호
-                alert_triggered = True
+                bad_posture_start_time = time.monotonic()
+
+            elapsed_time = int(time.monotonic() - bad_posture_start_time)
+
+            if elapsed_time >= BAD_POSTURE_THRESHOLD_SEC:
+                send_posture_command("C")  # Critical: 자동 기울기 보정
+            else:
+                send_posture_command("W")  # Warning: 모터 정지 유지
         else:
             bad_posture_start_time = None
-            if alert_triggered:
-                send_arduino_command('S')  # 정지 신호
-                alert_triggered = False
+            send_posture_command("N")  # Normal: 모든 모터 정지
+    else:
+        bad_posture_start_time = None
+        controller.current_status = {
+            "pose": "POSE_LOST",
+            "neck_angle": 0.0,
+            "back_angle": 0.0,
+            "updated_time": datetime.now().strftime("%H:%M:%S")
+        }
+        send_posture_command("N")
 
     # 화면에 텍스트 표시
     cv2.putText(frame, f"STATUS: {current_status}", (10, 30),
@@ -149,5 +193,6 @@ while cap.isOpened():
 
 cap.release()
 if ser and ser.is_open:
+    send_arduino_command("N")
     ser.close()
 cv2.destroyAllWindows()
