@@ -3,6 +3,7 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 controller_instance = None
 
+# 확인 위해 웹화면 코드 초안 작성해두었습니다! 구동 테스트 후에 고도화하거나 삭제할 예정입니다!
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ko">
@@ -12,15 +13,30 @@ HTML_TEMPLATE = """
     <title>스마트 책상 모니터링</title>
     <style>
         body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; text-align: center; }
-        .card { max-width: 450px; margin: 20px auto; background: white; border-radius: 16px; padding: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .card { max-width: 560px; margin: 20px auto; background: white; border-radius: 16px; padding: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         h1 { font-size: 20px; color: #333; margin-bottom: 20px; }
         .status-badge { font-size: 26px; font-weight: bold; padding: 15px; border-radius: 12px; margin-bottom: 20px; }
         .NORMAL { background-color: #e8f5e9; color: #2e7d32; }
         .TURTLE_NECK { background-color: #ffebee; color: #c62828; }
         .BENT_BACK { background-color: #fff3e0; color: #ef6c00; }
+        .POSE_LOST { background-color: #eceff1; color: #455a64; }
         .metrics { display: flex; justify-content: space-around; background: #fafafa; padding: 15px; border-radius: 10px; }
         .metric-item p { margin: 5px 0; font-size: 14px; color: #666; }
         .metric-item span { font-size: 20px; font-weight: bold; color: #111; }
+        .correction-panel { margin-top: 16px; padding: 16px; border: 1px solid #e0e0e0; border-radius: 12px; text-align: left; }
+        .correction-title { margin: 0 0 12px; color: #555; font-size: 14px; }
+        .correction-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .correction-item { padding: 12px; background: #fafafa; border-radius: 10px; }
+        .correction-item p { margin: 0 0 6px; color: #777; font-size: 12px; }
+        .correction-item span { font-size: 16px; font-weight: bold; }
+        .correction-badge { display: inline-block; padding: 6px 10px; border-radius: 999px; }
+        .phase-IDLE { background: #eceff1; color: #455a64; }
+        .phase-APPLYING { background: #fff3e0; color: #ef6c00; }
+        .phase-APPLIED { background: #e3f2fd; color: #1565c0; }
+        .phase-RESTORING { background: #ede7f6; color: #5e35b1; }
+        .phase-FAULT { background: #ffebee; color: #c62828; }
+        .connection-ok { color: #2e7d32; }
+        .connection-off { color: #c62828; }
         .time { margin-top: 15px; font-size: 12px; color: #aaa; }
     </style>
 </head>
@@ -40,6 +56,27 @@ HTML_TEMPLATE = """
                 <span id="back-angle">0</span>°
             </div>
         </div>
+        <div class="correction-panel">
+            <p class="correction-title">책상 교정 상태</p>
+            <div class="correction-grid">
+                <div class="correction-item">
+                    <p>현재 단계</p>
+                    <span id="correction-phase" class="correction-badge phase-IDLE">IDLE</span>
+                </div>
+                <div class="correction-item">
+                    <p>적용된 교정</p>
+                    <span id="active-correction">NONE</span>
+                </div>
+                <div class="correction-item">
+                    <p>원위치 복귀까지</p>
+                    <span id="restore-remaining">-</span>
+                </div>
+                <div class="correction-item">
+                    <p>Arduino 연결</p>
+                    <span id="arduino-connection" class="connection-off">연결 안 됨</span>
+                </div>
+            </div>
+        </div>
         <div class="time">최종 갱신 시간: <span id="update-time">-</span></div>
     </div>
 
@@ -52,11 +89,37 @@ HTML_TEMPLATE = """
                     document.getElementById('neck-angle').innerText = data.neck_angle;
                     document.getElementById('back-angle').innerText = data.back_angle;
                     document.getElementById('update-time').innerText = data.updated_time;
-                    
+
                     const badge = document.getElementById('badge');
                     badge.className = 'status-badge ' + data.pose;
+
+                    const phase = data.correction_phase || 'IDLE';
+                    const phaseBadge = document.getElementById('correction-phase');
+                    phaseBadge.innerText = phase;
+                    phaseBadge.className = 'correction-badge phase-' + phase;
+
+                    document.getElementById('active-correction').innerText =
+                        data.active_correction || 'NONE';
+
+                    const remaining = data.restore_remaining_sec;
+                    document.getElementById('restore-remaining').innerText =
+                        Number.isFinite(remaining)
+                            ? remaining + '초'
+                            : (phase === 'APPLIED' ? '정상 자세 대기 중' : '-');
+
+                    const connection = document.getElementById('arduino-connection');
+                    connection.innerText = data.arduino_connected ? '연결됨' : '연결 안 됨';
+                    connection.className = data.arduino_connected
+                        ? 'connection-ok'
+                        : 'connection-off';
+                })
+                .catch(() => {
+                    const connection = document.getElementById('arduino-connection');
+                    connection.innerText = '서버 응답 오류';
+                    connection.className = 'connection-off';
                 });
         }
+        fetchStatus();
         setInterval(fetchStatus, 1000);
     </script>
 </body>
@@ -71,7 +134,16 @@ def index():
 def get_status():
     if controller_instance:
         return jsonify(controller_instance.current_status)
-    return jsonify({"pose": "UNKNOWN", "neck_angle": 0, "back_angle": 0, "updated_time": ""})
+    return jsonify({
+        "pose": "UNKNOWN",
+        "neck_angle": 0,
+        "back_angle": 0,
+        "correction_phase": "IDLE",
+        "active_correction": "NONE",
+        "restore_remaining_sec": None,
+        "arduino_connected": False,
+        "updated_time": ""
+    })
 
 def start_server(ctrl_obj):
     global controller_instance

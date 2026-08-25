@@ -4,10 +4,10 @@
  * 사용 하드웨어
  *   - A4988 + NEMA17 17HS3401S-T8x8: 상판 기울기
  *   - L298N + 12 V 리니어 액추에이터: 책상 높이
- *   - Active-LOW 리미트 스위치, 비상정지, 아날로그 전류 센서
+ *   - Active-LOW 단일 비상정지 스위치, 아날로그 전류 센서
  *
  * 라즈베리파이 통신: USB 시리얼, 9600 baud
- * N/W/C/H 상태 프로토콜을 사용하며 줄바꿈 없는 한 글자 명령도 지원한다.
+ * N/W/C <posture>/H/R 프로토콜을 사용한다.
  */
 
 #include <Arduino.h>
@@ -34,7 +34,8 @@ const uint8_t PIN_EMERGENCY_STOP = 12;
 const uint8_t PIN_CURRENT_SENSOR = A0;
 
 // 센서를 연결하지 않은 무부하 벤치 시험에서만 false로 변경한다.
-const bool LIMIT_SWITCHES_ENABLED = true;
+// D8~D11 리미트 입력은 사용하지 않고 D12 비상정지만 사용한다.
+const bool LIMIT_SWITCHES_ENABLED = false;
 const bool EMERGENCY_STOP_ENABLED = true;
 const bool CURRENT_SENSOR_ENABLED = true;
 
@@ -52,7 +53,8 @@ const uint8_t TILT_UP_DIR_LEVEL = HIGH;
 // 실제 기구에서 보수적으로 실측·보정해야 하는 값이다.
 const float TILT_MAX_TRAVEL_MM = 100.0f;
 const float TILT_SPEED_MM_PER_SEC = 4.0f;
-const float AUTO_TILT_TARGET_MM = 5.0f;
+const float AUTO_TILT_DELTA_MM = 5.0f;
+const unsigned long AUTO_HEIGHT_ADJUST_MS = 1500UL;
 
 // 100 mm / 9.5 mm/s의 이론값을 올림한 최대 구동 시간이다.
 const unsigned long ACTUATOR_MAX_RUN_MS = 10527UL;
@@ -90,13 +92,30 @@ enum HeightMode {
   HEIGHT_SAFETY_REVERSING
 };
 
+enum CorrectionType {
+  CORRECTION_NONE,
+  CORRECTION_TURTLE_NECK,
+  CORRECTION_BENT_BACK
+};
+
+enum CorrectionPhase {
+  CORRECTION_IDLE,
+  CORRECTION_APPLYING,
+  CORRECTION_APPLIED,
+  CORRECTION_RESTORING,
+  CORRECTION_FAULT
+};
+
 TiltMode tiltMode = TILT_IDLE;
 HeightMode heightMode = HEIGHT_STOPPED;
 HeightMode heightTravelDirection = HEIGHT_STOPPED;
+CorrectionType correctionType = CORRECTION_NONE;
+CorrectionPhase correctionPhase = CORRECTION_IDLE;
 
 long tiltPositionSteps = 0;
 long tiltTargetSteps = 0;
 bool tiltZeroSet = false;
+long correctionStartTiltSteps = 0;
 
 unsigned long tiltStepIntervalUs = 0;
 unsigned long lastTiltStepUs = 0;
@@ -155,6 +174,11 @@ bool anyMotionActive() {
   return tiltMode != TILT_IDLE || heightMode != HEIGHT_STOPPED;
 }
 
+bool tiltAtHeightSafeReference() {
+  return tiltZeroSet && tiltPositionSteps == 0 && tiltTargetSteps == 0 &&
+         (!LIMIT_SWITCHES_ENABLED || tiltBottomLimitActive());
+}
+
 long mmToSteps(float millimeters) {
   return lround(millimeters * TILT_STEPS_PER_MM);
 }
@@ -170,6 +194,55 @@ unsigned long speedToStepIntervalUs(float millimetersPerSecond) {
 
 void enableStepper(bool enabled) {
   digitalWrite(PIN_STEP_ENABLE, enabled ? LOW : HIGH);
+}
+
+void printCorrectionType(CorrectionType type) {
+  if (type == CORRECTION_TURTLE_NECK) {
+    Serial.print(F("TURTLE_NECK"));
+  } else if (type == CORRECTION_BENT_BACK) {
+    Serial.print(F("BENT_BACK"));
+  } else {
+    Serial.print(F("NONE"));
+  }
+}
+
+void printCorrectionPhase(CorrectionPhase phase) {
+  if (phase == CORRECTION_APPLYING) {
+    Serial.print(F("APPLYING"));
+  } else if (phase == CORRECTION_APPLIED) {
+    Serial.print(F("APPLIED"));
+  } else if (phase == CORRECTION_RESTORING) {
+    Serial.print(F("RESTORING"));
+  } else if (phase == CORRECTION_FAULT) {
+    Serial.print(F("FAULT"));
+  } else {
+    Serial.print(F("IDLE"));
+  }
+}
+
+void markCorrectionFault(const __FlashStringHelper *reason) {
+  if (correctionPhase != CORRECTION_APPLYING &&
+      correctionPhase != CORRECTION_RESTORING) {
+    return;
+  }
+
+  correctionPhase = CORRECTION_FAULT;
+  Serial.print(F("ERR CORRECTION_FAULT "));
+  Serial.println(reason);
+}
+
+void finishCorrectionMotion() {
+  if (correctionPhase == CORRECTION_APPLYING) {
+    correctionPhase = CORRECTION_APPLIED;
+    Serial.print(F("DONE CORRECTION "));
+    printCorrectionType(correctionType);
+    Serial.println();
+  } else if (correctionPhase == CORRECTION_RESTORING) {
+    correctionPhase = CORRECTION_IDLE;
+    correctionType = CORRECTION_NONE;
+    correctionStartTiltSteps = 0;
+    Serial.println(F("DONE RESTORE"));
+  }
 }
 
 void stopTilt(const __FlashStringHelper *reason) {
@@ -203,8 +276,15 @@ void stopHeightNow(const __FlashStringHelper *reason) {
 }
 
 void stopAll(const __FlashStringHelper *reason) {
+  const bool interruptedCorrection =
+      anyMotionActive() &&
+      (correctionPhase == CORRECTION_APPLYING ||
+       correctionPhase == CORRECTION_RESTORING);
   stopTilt(reason);
   stopHeightNow(reason);
+  if (interruptedCorrection) {
+    markCorrectionFault(reason);
+  }
 }
 
 void printStatus() {
@@ -216,6 +296,10 @@ void printStatus() {
   Serial.print((int)tiltMode);
   Serial.print(F(" HEIGHT_MODE="));
   Serial.print((int)heightMode);
+  Serial.print(F(" CORRECTION_TYPE="));
+  printCorrectionType(correctionType);
+  Serial.print(F(" CORRECTION_PHASE="));
+  printCorrectionPhase(correctionPhase);
   Serial.print(F(" CURRENT="));
   Serial.print(analogRead(PIN_CURRENT_SENSOR));
   Serial.print(F(" LIMITS="));
@@ -234,7 +318,6 @@ void setTiltZero() {
     Serial.println(F("ERR BUSY"));
     return;
   }
-
   tiltPositionSteps = 0;
   tiltTargetSteps = 0;
   tiltZeroSet = true;
@@ -279,46 +362,46 @@ void startTiltHome() {
   Serial.println(F("OK HOME"));
 }
 
-void startTiltMoveMm(float targetMm,
+bool startTiltMoveMm(float targetMm,
                      const __FlashStringHelper *acceptedCommand) {
   if (!tiltZeroSet) {
     Serial.println(F("ERR TILT_ZERO_NOT_SET"));
-    return;
+    return false;
   }
   if (tiltMode != TILT_IDLE) {
     Serial.println(F("ERR BUSY_TILT"));
-    return;
+    return false;
   }
   if (heightMode != HEIGHT_STOPPED) {
     Serial.println(F("ERR BUSY_HEIGHT"));
-    return;
+    return false;
   }
   if (emergencyStopActive()) {
     Serial.println(F("ERR EMERGENCY_ACTIVE"));
-    return;
+    return false;
   }
   if (limitConflictActive()) {
     Serial.println(F("ERR LIMIT_CONFLICT"));
-    return;
+    return false;
   }
   if (!isfinite(targetMm) || targetMm < 0.0f ||
       targetMm > TILT_MAX_TRAVEL_MM) {
     Serial.println(F("ERR TILT_RANGE"));
-    return;
+    return false;
   }
 
   tiltTargetSteps = mmToSteps(targetMm);
   if (tiltTargetSteps == tiltPositionSteps) {
     Serial.print(F("DONE "));
     Serial.println(acceptedCommand);
-    return;
+    return true;
   }
 
   const bool movingUp = tiltTargetSteps > tiltPositionSteps;
   if ((movingUp && tiltTopLimitActive()) ||
       (!movingUp && tiltBottomLimitActive())) {
     Serial.println(F("ERR TILT_LIMIT_ACTIVE"));
-    return;
+    return false;
   }
 
   const uint8_t directionLevel =
@@ -332,6 +415,7 @@ void startTiltMoveMm(float targetMm,
   enableStepper(true);
   Serial.print(F("OK "));
   Serial.println(acceptedCommand);
+  return true;
 }
 
 void updateTilt() {
@@ -342,6 +426,7 @@ void updateTilt() {
   if (millis() - tiltMotionStartedMs > TILT_MOTION_TIMEOUT_MS) {
     stopTilt(F("TIMEOUT"));
     Serial.println(F("ERR TILT_TIMEOUT"));
+    markCorrectionFault(F("TILT_TIMEOUT"));
     return;
   }
 
@@ -358,8 +443,10 @@ void updateTilt() {
       Serial.println(F("DONE HOME"));
     } else if (expectedBottom) {
       Serial.println(F("DONE TILT"));
+      finishCorrectionMotion();
     } else {
       Serial.println(F("ERR TILT_BOTTOM_LIMIT"));
+      markCorrectionFault(F("TILT_BOTTOM_LIMIT"));
     }
     return;
   }
@@ -369,6 +456,7 @@ void updateTilt() {
     tiltTargetSteps = tiltPositionSteps;
     stopTilt(F("TOP_LIMIT"));
     Serial.println(F("ERR TILT_TOP_LIMIT"));
+    markCorrectionFault(F("TILT_TOP_LIMIT"));
     return;
   }
 
@@ -385,8 +473,16 @@ void updateTilt() {
   if (!homing) {
     tiltPositionSteps += movingUp ? 1 : -1;
     if (tiltPositionSteps == tiltTargetSteps) {
+      if (tiltTargetSteps == 0 && LIMIT_SWITCHES_ENABLED &&
+          !tiltBottomLimitActive()) {
+        stopTilt(F("HOME_NOT_CONFIRMED"));
+        Serial.println(F("ERR TILT_HOME_NOT_CONFIRMED"));
+        markCorrectionFault(F("TILT_HOME_NOT_CONFIRMED"));
+        return;
+      }
       stopTilt(F("TARGET"));
       Serial.println(F("DONE TILT"));
+      finishCorrectionMotion();
     }
   }
 }
@@ -403,31 +499,36 @@ void setHeightDirection(HeightMode direction) {
   }
 }
 
-void startHeight(HeightMode direction, unsigned long requestedMs) {
+bool startHeight(HeightMode direction, unsigned long requestedMs) {
   if (tiltMode != TILT_IDLE) {
     Serial.println(F("ERR BUSY_TILT"));
-    return;
+    return false;
+  }
+  // 기울기가 기준 위치(0 mm)가 아니면 높이 축은 어떤 경우에도 구동하지 않는다.
+  if (!tiltAtHeightSafeReference()) {
+    Serial.println(F("ERR HEIGHT_BLOCKED_TILT_NOT_HOME"));
+    return false;
   }
   if (heightMode != HEIGHT_STOPPED) {
     Serial.println(F("ERR BUSY_HEIGHT"));
-    return;
+    return false;
   }
   if (emergencyStopActive()) {
     Serial.println(F("ERR EMERGENCY_ACTIVE"));
-    return;
+    return false;
   }
   if (limitConflictActive()) {
     Serial.println(F("ERR LIMIT_CONFLICT"));
-    return;
+    return false;
   }
   if (requestedMs == 0 || requestedMs > ACTUATOR_MAX_RUN_MS) {
     Serial.println(F("ERR HEIGHT_TIME_RANGE"));
-    return;
+    return false;
   }
   if ((direction == HEIGHT_UP && heightTopLimitActive()) ||
       (direction == HEIGHT_DOWN && heightBottomLimitActive())) {
     Serial.println(F("ERR HEIGHT_LIMIT_ACTIVE"));
-    return;
+    return false;
   }
 
   setHeightDirection(direction);
@@ -442,6 +543,7 @@ void startHeight(HeightMode direction, unsigned long requestedMs) {
   overcurrentSamples = 0;
   analogWrite(PIN_ACTUATOR_PWM, 0);
   Serial.println(F("OK HEIGHT"));
+  return true;
 }
 
 void beginHeightSoftStop(const __FlashStringHelper *reason) {
@@ -503,6 +605,7 @@ void updateHeightPwm() {
     const __FlashStringHelper *reason = heightBrakeReason;
     stopHeightNow(reason == NULL ? F("BRAKE") : reason);
     Serial.println(F("DONE HEIGHT"));
+    finishCorrectionMotion();
   }
 }
 
@@ -515,6 +618,7 @@ void updateHeight() {
       (heightTravelDirection == HEIGHT_DOWN && heightBottomLimitActive())) {
     stopHeightNow(F("LIMIT"));
     Serial.println(F("ERR HEIGHT_LIMIT"));
+    markCorrectionFault(F("HEIGHT_LIMIT"));
     return;
   }
 
@@ -535,6 +639,7 @@ void updateHeight() {
       const bool wasMovingUp = heightTravelDirection == HEIGHT_UP;
       stopHeightNow(F("OVERCURRENT"));
       Serial.println(F("ERR OVERCURRENT"));
+      markCorrectionFault(F("OVERCURRENT"));
       if (wasMovingUp) {
         startSafetyReversePause();
       }
@@ -561,6 +666,93 @@ void updateHeight() {
   }
 
   updateHeightPwm();
+}
+
+// ---------------------- 자세 교정 및 원위치 복귀 -------------------------
+
+bool rejectIfCorrectionLocked() {
+  if (correctionPhase == CORRECTION_IDLE) {
+    return false;
+  }
+  Serial.println(F("ERR CORRECTION_LOCKED"));
+  return true;
+}
+
+void startPostureCorrection(CorrectionType requestedType) {
+  if (correctionPhase != CORRECTION_IDLE) {
+    Serial.println(F("ERR CORRECTION_LOCKED"));
+    return;
+  }
+  if (anyMotionActive()) {
+    Serial.println(F("ERR BUSY"));
+    return;
+  }
+
+  // 두 자동 교정 모두 안전 기준 위치인 기울기 0 mm에서만 시작한다.
+  if (!tiltAtHeightSafeReference()) {
+    Serial.println(F("ERR CORRECTION_REQUIRES_TILT_HOME"));
+    return;
+  }
+
+  correctionType = requestedType;
+  correctionPhase = CORRECTION_APPLYING;
+  correctionStartTiltSteps = tiltPositionSteps;
+
+  bool started = false;
+  if (requestedType == CORRECTION_TURTLE_NECK) {
+    // 거북목: 상판을 사용자 쪽으로 기울여 고개를 덜 숙이게 한다.
+    const float targetMm =
+        stepsToMm(correctionStartTiltSteps) + AUTO_TILT_DELTA_MM;
+    started = startTiltMoveMm(targetMm,
+                              F("CORRECTION_TURTLE_NECK"));
+  } else if (requestedType == CORRECTION_BENT_BACK) {
+    // 굽은 허리: 책상이 낮다고 보고 높이를 제한된 시간만 올린다.
+    started = startHeight(HEIGHT_UP, AUTO_HEIGHT_ADJUST_MS);
+  }
+
+  if (!started) {
+    correctionType = CORRECTION_NONE;
+    correctionPhase = CORRECTION_IDLE;
+    correctionStartTiltSteps = 0;
+    Serial.println(F("ERR CORRECTION_NOT_STARTED"));
+    return;
+  }
+
+  if (!anyMotionActive()) {
+    finishCorrectionMotion();
+  }
+}
+
+void startRestore() {
+  if (correctionPhase != CORRECTION_APPLIED) {
+    Serial.println(F("ERR RESTORE_NOT_READY"));
+    return;
+  }
+  if (anyMotionActive()) {
+    Serial.println(F("ERR BUSY"));
+    return;
+  }
+
+  correctionPhase = CORRECTION_RESTORING;
+  bool started = false;
+  if (correctionType == CORRECTION_TURTLE_NECK) {
+    // 교정 시작 때 기억한 스텝 위치로 정확히 같은 거리만큼 되돌아간다.
+    started = startTiltMoveMm(stepsToMm(correctionStartTiltSteps),
+                              F("RESTORE_TILT"));
+  } else if (correctionType == CORRECTION_BENT_BACK) {
+    // 위치 센서가 없으므로 올린 시간과 같은 시간만큼 하강한다.
+    started = startHeight(HEIGHT_DOWN, AUTO_HEIGHT_ADJUST_MS);
+  }
+
+  if (!started) {
+    correctionPhase = CORRECTION_APPLIED;
+    Serial.println(F("ERR RESTORE_NOT_STARTED"));
+    return;
+  }
+
+  if (!anyMotionActive()) {
+    finishCorrectionMotion();
+  }
 }
 
 // ------------------------- 시리얼 통신 처리 ------------------------------
@@ -592,10 +784,28 @@ void handleCommand(char *line) {
   }
   uppercase(command);
 
-  // N=Normal, W=Warning, C=Critical, H=Heartbeat.
+  // N=Normal, W=Warning, C <posture>=Critical, H=Heartbeat, R=Restore.
   if (strcmp(command, "C") == 0) {
+    char *posture = strtok(NULL, " \t");
+    if (posture == NULL || strtok(NULL, " \t") != NULL) {
+      Serial.println(F("ERR C_ARGUMENT"));
+      return;
+    }
+    uppercase(posture);
     markValidCommand();
-    startTiltMoveMm(AUTO_TILT_TARGET_MM, F("C"));
+    if (strcmp(posture, "TURTLE_NECK") == 0) {
+      startPostureCorrection(CORRECTION_TURTLE_NECK);
+    } else if (strcmp(posture, "BENT_BACK") == 0) {
+      startPostureCorrection(CORRECTION_BENT_BACK);
+    } else {
+      Serial.println(F("ERR C_POSTURE"));
+    }
+    return;
+  }
+
+  if (strcmp(command, "R") == 0) {
+    markValidCommand();
+    startRestore();
     return;
   }
 
@@ -640,18 +850,27 @@ void handleCommand(char *line) {
   }
 
   if (strcmp(command, "SET_ZERO") == 0) {
+    if (rejectIfCorrectionLocked()) {
+      return;
+    }
     markValidCommand();
     setTiltZero();
     return;
   }
 
   if (strcmp(command, "HOME") == 0) {
+    if (rejectIfCorrectionLocked()) {
+      return;
+    }
     markValidCommand();
     startTiltHome();
     return;
   }
 
   if (strcmp(command, "TILT") == 0) {
+    if (rejectIfCorrectionLocked()) {
+      return;
+    }
     char *value = strtok(NULL, " \t");
     float targetMm = 0.0f;
     if (!parseFloatArgument(value, targetMm) || strtok(NULL, " \t") != NULL) {
@@ -664,6 +883,9 @@ void handleCommand(char *line) {
   }
 
   if (strcmp(command, "TILT_REL") == 0) {
+    if (rejectIfCorrectionLocked()) {
+      return;
+    }
     char *value = strtok(NULL, " \t");
     float deltaMm = 0.0f;
     if (!parseFloatArgument(value, deltaMm) ||
@@ -681,6 +903,9 @@ void handleCommand(char *line) {
   }
 
   if (strcmp(command, "HEIGHT") == 0) {
+    if (rejectIfCorrectionLocked()) {
+      return;
+    }
     char *direction = strtok(NULL, " \t");
     char *duration = strtok(NULL, " \t");
     if (direction == NULL || duration == NULL || strtok(NULL, " \t") != NULL) {
@@ -774,18 +999,16 @@ void setup() {
   Serial.begin(9600);
   lastValidCommandMs = millis();
 
-  if (tiltBottomLimitActive() && !tiltTopLimitActive()) {
-    tiltZeroSet = true;
-    tiltPositionSteps = 0;
-    tiltTargetSteps = 0;
-  }
+  // 리미트가 없으므로 전원을 켠 순간의 기울기를 소프트웨어 기준 0점으로 삼는다.
+  tiltZeroSet = true;
+  tiltPositionSteps = 0;
+  tiltTargetSteps = 0;
 
-  Serial.println(F("READY SMART_POSTURE_DESK_V4_NWCH"));
+  Serial.println(F("READY SMART_POSTURE_DESK_V5_NWCHR"));
   if (limitConflictActive()) {
     Serial.println(F("ERR LIMIT_CONFLICT"));
   }
-  Serial.println(tiltZeroSet ? F("INFO TILT_ZERO_FROM_LIMIT")
-                             : F("INFO SEND_HOME_OR_SET_ZERO"));
+  Serial.println(F("INFO TILT_ZERO_FROM_BOOT_POSITION"));
 }
 
 void loop() {
