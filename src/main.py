@@ -6,12 +6,8 @@ import serial
 import threading
 from datetime import datetime
 
-# server.py 모듈 임포트
 from ui.server import start_server
 
-# ==========================================
-# 1. 웹 서버에 공유할 데이터를 담는 객체
-# ==========================================
 class PoseController:
     def __init__(self):
         self.current_status = {
@@ -27,14 +23,11 @@ class PoseController:
 
 controller = PoseController()
 
-# 웹 서버를 백그라운드 스레드로 실행
 server_thread = threading.Thread(target=start_server, args=(controller,), daemon=True)
 server_thread.start()
 print("웹 모니터링 서버가 백그라운드에서 실행되었습니다. (port 5000)")
 
-# ==========================================
-# 2. 아두이노 시리얼 통신 설정
-# ==========================================
+
 try:
     ser = serial.Serial('/dev/ttyUSB0', 9600, timeout=1)
     time.sleep(2)
@@ -188,9 +181,7 @@ def read_arduino_messages():
     except serial.SerialException as e:
         print(f"[SERIAL ERROR] 응답 수신 실패: {e}")
 
-# ==========================================
-# 3. MediaPipe Pose 및 기본 변수 설정
-# ==========================================
+
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(
     static_image_mode=False,
@@ -206,7 +197,6 @@ def calculate_vertical_angle(p1, p2):
     angle_rad = math.atan2(abs(dx), abs(dy))
     return round(math.degrees(angle_rad), 1)
 
-# 지속 시간 측정 변수 (5분 = 300초)
 BAD_POSTURE_THRESHOLD_SEC = 300
 bad_posture_start_time = None
 bad_posture_type = None
@@ -241,7 +231,6 @@ while cap.isOpened():
     if results.pose_landmarks:
         landmarks = results.pose_landmarks.landmark
         
-        # 6개 주요 좌표 추출 (오른쪽 측면)
         ear = (int(landmarks[mp_pose.PoseLandmark.RIGHT_EAR].x * w),
                int(landmarks[mp_pose.PoseLandmark.RIGHT_EAR].y * h))
         shoulder = (int(landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].x * w),
@@ -249,11 +238,9 @@ while cap.isOpened():
         hip = (int(landmarks[mp_pose.PoseLandmark.RIGHT_HIP].x * w),
                int(landmarks[mp_pose.PoseLandmark.RIGHT_HIP].y * h))
 
-        # 각도 계산
         neck_angle = calculate_vertical_angle(ear, shoulder)
         back_angle = calculate_vertical_angle(shoulder, hip)
-        
-        # 자세 판단
+  
         if neck_angle > 15:
             current_status = "TURTLE_NECK"
             status_color = (0, 0, 255)
@@ -261,9 +248,6 @@ while cap.isOpened():
             current_status = "BENT_BACK"
             status_color = (0, 165, 255)
 
-        # ------------------------------------------
-        # 4. 팀원의 server.py로 실시간 데이터 송출
-        # ------------------------------------------
         controller.current_status = {
             "pose": current_status,
             "neck_angle": neck_angle,
@@ -271,12 +255,11 @@ while cap.isOpened():
             "updated_time": datetime.now().strftime("%H:%M:%S")
         }
 
-        # 나쁜 자세 교정, 교정 잠금, 장시간 정상 자세 후 복귀 상태 머신
         if correction_phase == CORRECTION_IDLE:
             normal_posture_start_time = None
 
             if current_status in ["TURTLE_NECK", "BENT_BACK"]:
-                # 다른 종류의 나쁜 자세로 바뀌면 해당 자세의 5분을 다시 측정한다.
+            
                 if (bad_posture_start_time is None or
                         bad_posture_type != current_status):
                     bad_posture_start_time = time.monotonic()
@@ -297,7 +280,6 @@ while cap.isOpened():
                 send_posture_command("N")
 
         elif correction_phase == CORRECTION_APPLIED:
-            # 교정된 동안 다른 나쁜 자세가 보여도 C/W/N 모터 명령을 보내지 않는다.
             bad_posture_start_time = None
             bad_posture_type = None
 
@@ -311,11 +293,9 @@ while cap.isOpened():
                         correction_phase = CORRECTION_RESTORING
                         normal_posture_start_time = None
             else:
-                # 자세 인식 실패나 나쁜 자세가 한 번이라도 나오면 정상 타이머를 초기화한다.
                 normal_posture_start_time = None
 
         else:
-            # APPLYING/RESTORING/FAULT에서는 heartbeat 외의 동작 명령을 금지한다.
             bad_posture_start_time = None
             bad_posture_type = None
             normal_posture_start_time = None
@@ -335,7 +315,6 @@ while cap.isOpened():
 
     update_web_correction_status()
 
-    # 화면에 텍스트 표시
     cv2.putText(frame, f"STATUS: {current_status}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
 
