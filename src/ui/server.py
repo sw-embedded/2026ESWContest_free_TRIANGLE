@@ -3,7 +3,6 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 controller_instance = None
 
-# 확인 위해 웹화면 코드 초안 작성해두었습니다! 구동 테스트 후에 고도화하거나 삭제할 예정입니다!
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ko">
