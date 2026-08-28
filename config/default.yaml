@@ -2,35 +2,17 @@ camera:
   device_id: 0
   width: 640
   height: 480
-  sample_interval_sec: 5
+  sample_interval_sec: 0.05
 
 pose:
-  model: lite
-  side: left
-  min_visibility: 0.6
-  use_knee: false
+  model: thunder
+  min_visibility: 0.05
 
 posture:
-  calibration_enabled: true
-  head_forward_ratio_threshold: 0.25
-  torso_angle_threshold_deg: 15
-  head_pitch_threshold_deg: 20
-  bad_condition_count: 2
-  bad_duration_sec: 300
-  bad_sample_ratio: 0.8
-
-warning:
-  enabled: true
-  duration_sec: 5
+  head_pitch_threshold_deg: 22.0
+  torso_angle_threshold_deg: 15.0
 
 actuator:
   enabled: true
-  action: tilt
-  motor_run_sec: 3
-  max_motor_run_sec: 10
-  cooldown_sec: 60
-
-safety:
-  limit_switch_enabled: true
-  stop_on_pose_lost: true
-  stop_on_error: true
+  port: /dev/ttyACM0
+  baudrate: 9600
