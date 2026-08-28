@@ -30,14 +30,11 @@ def load_config(config_path="config/default.yaml"):
 
 def main():
     config = load_config("config/default.yaml")
-
     controller = PoseController()
 
-    # 웹 상태 서버 시작
     server_thread = threading.Thread(target=start_server, args=(controller,), daemon=True)
     server_thread.start()
 
-    # 각 모듈 초기화
     cam_cfg = config.get('camera', {})
     cam_manager = CameraManager(
         width=cam_cfg.get('width', 640),
@@ -48,7 +45,11 @@ def main():
     detector = PoseDetector(model_type=pose_cfg.get('model', 'thunder'))
 
     act_cfg = config.get('actuator', {})
-    serial_ctrl = SerialController(enabled=act_cfg.get('enabled', True))
+    serial_ctrl = SerialController(
+        port=act_cfg.get('port', '/dev/ttyACM0'),
+        baudrate=act_cfg.get('baudrate', 9600),
+        enabled=act_cfg.get('enabled', True)
+    )
 
     filter_neck = ExponentialFilter(alpha=0.3)
     filter_back = ExponentialFilter(alpha=0.3)
@@ -60,7 +61,6 @@ def main():
         while True:
             now_str = datetime.now().strftime("%H:%M:%S")
             
-            # 아두이노 Watchdog 방지용 주기적 Heartbeat (2초 간격)
             if time.time() - last_heartbeat > 2.0:
                 serial_ctrl.send_heartbeat()
                 last_heartbeat = time.time()
@@ -70,16 +70,13 @@ def main():
                 time.sleep(0.1)
                 continue
 
-            # Pose 추론
             keypoints, scale, pad_x, pad_y = detector.detect(frame)
 
-            # 자세 평가
             pose, neck_angle, back_angle = PostureEvaluator.evaluate(
                 keypoints, detector.input_size, scale, pad_x, pad_y, 
                 filter_neck, filter_back, config
             )
 
-            # 컨트롤러 상태 갱신
             controller.current_status = {
                 "pose": pose,
                 "neck_angle": neck_angle,
@@ -87,7 +84,6 @@ def main():
                 "updated_time": now_str
             }
 
-            # 아두이노 제어 프로토콜 전송
             if pose in ["TURTLE_NECK", "BENT_BACK"]:
                 serial_ctrl.send_critical(pose)
             elif pose == "NORMAL":
