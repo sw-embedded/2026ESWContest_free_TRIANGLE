@@ -1,0 +1,171 @@
+import cv2
+import numpy as np
+import math
+import time
+import threading
+from datetime import datetime
+from picamera2 import Picamera2
+
+try:
+    from ai_edge_litert.interpreter import Interpreter
+except ImportError:
+    try:
+        import tflite_runtime.interpreter as tflite
+        Interpreter = tflite.Interpreter
+    except ImportError:
+        import tensorflow.lite as tflite
+        Interpreter = tflite.Interpreter
+
+from ui.server import start_server
+
+class ExponentialFilter:
+    def __init__(self, alpha=0.3):
+        self.alpha = alpha
+        self.smoothed_val = None
+
+    def update(self, val):
+        if self.smoothed_val is None:
+            self.smoothed_val = val
+        else:
+            self.smoothed_val = self.alpha * val + (1 - self.alpha) * self.smoothed_val
+        return round(self.smoothed_val, 1)
+
+filter_neck = ExponentialFilter(alpha=0.3)
+filter_back = ExponentialFilter(alpha=0.3)
+
+class PoseController:
+    def __init__(self):
+        self.current_status = {
+            "pose": "INIT",
+            "neck_angle": 0.0,
+            "back_angle": 0.0,
+            "updated_time": "-"
+        }
+
+controller = PoseController()
+
+server_thread = threading.Thread(target=start_server, args=(controller,), daemon=True)
+server_thread.start()
+
+MODEL_PATH = "models/movenet_singlepose_thunder.tflite"
+try:
+    interpreter = Interpreter(model_path=MODEL_PATH)
+except Exception:
+    MODEL_PATH = "models/movenet_singlepose_lightning.tflite"
+    interpreter = Interpreter(model_path=MODEL_PATH)
+
+interpreter.allocate_tensors()
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+input_size = input_details[0]['shape'][1]
+
+picam2 = Picamera2()
+config = picam2.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
+picam2.configure(config)
+picam2.start()
+
+def preprocess_letterbox(img, target_size):
+    h, w, _ = img.shape
+    scale = target_size / max(h, w)
+    nh, nw = int(h * scale), int(w * scale)
+    resized = cv2.resize(img, (nw, nh))
+    
+    padded = np.zeros((target_size, target_size, 3), dtype=np.uint8)
+    dy, dx = (target_size - nh) // 2, (target_size - nw) // 2
+    padded[dy:dy+nh, dx:dx+nw] = resized
+    return padded, scale, dx, dy
+
+# 두 점 간의 수직 대비 전방 기울기 계산 (귀가 어깨보다 앞에 있을 때만 삼각함수 적용)
+def calculate_forward_neck_angle(p_ear, p_shoulder):
+    dx = p_ear[0] - p_shoulder[0] # 귀와 어깨의 X축(앞뒤) 차이
+    dy = p_shoulder[1] - p_ear[1] # Y축(높이) 차이
+    
+    # 귀가 어깨보다 뒤에 있거나 높이가 이상하면 0도 (바른자세)
+    if dy <= 0:
+        return 0.0
+    
+    # 삼각함수로 수직선 대비 전방 기울기 각도 계산
+    angle = math.degrees(math.atan2(dx, dy))
+    return max(0.0, angle)
+
+def calculate_vertical_angle(p1, p2):
+    dx = abs(p1[0] - p2[0])
+    dy = abs(p1[1] - p2[1])
+    if dy == 0: return 0.0
+    return math.degrees(math.atan2(dx, dy))
+
+try:
+    while True:
+        now_str = datetime.now().strftime("%H:%M:%S")
+        frame = picam2.capture_array()
+        if frame is None:
+            time.sleep(0.1)
+            continue
+
+        input_img, scale, pad_x, pad_y = preprocess_letterbox(frame, input_size)
+
+        dtype = input_details[0]['dtype']
+        if dtype == np.uint8:
+            input_tensor = np.expand_dims(input_img, axis=0).astype(np.uint8)
+        else:
+            input_tensor = np.expand_dims(input_img, axis=0).astype(np.float32) / 255.0
+
+        interpreter.set_tensor(input_details[0]['index'], input_tensor)
+        interpreter.invoke()
+        keypoints = interpreter.get_tensor(output_details[0]['index'])[0][0]
+
+        l_ear, r_ear = keypoints[3], keypoints[4]
+        l_shoulder, r_shoulder = keypoints[5], keypoints[6]
+        l_hip, r_hip = keypoints[11], keypoints[12]
+
+        r_score = r_ear[2] + r_shoulder[2] + r_hip[2]
+        l_score = l_ear[2] + l_shoulder[2] + l_hip[2]
+
+        if r_score >= l_score:
+            ear, shoulder, hip = r_ear, r_shoulder, r_hip
+        else:
+            ear, shoulder, hip = l_ear, l_shoulder, l_hip
+
+        if ear[2] > 0.05 and shoulder[2] > 0.05:
+            p_ear = (int((ear[1] * input_size - pad_x) / scale), int((ear[0] * input_size - pad_y) / scale))
+            p_shoulder = (int((shoulder[1] * input_size - pad_x) / scale), int((shoulder[0] * input_size - pad_y) / scale))
+            
+            # 목 전방 경사각 산출
+            raw_neck = calculate_forward_neck_angle(p_ear, p_shoulder)
+            
+            has_hip = hip[2] > 0.05
+            if has_hip:
+                p_hip = (int((hip[1] * input_size - pad_x) / scale), int((hip[0] * input_size - pad_y) / scale))
+                raw_back = calculate_vertical_angle(p_shoulder, p_hip)
+            else:
+                raw_back = 0.0
+
+            neck_angle = filter_neck.update(raw_neck)
+            back_angle = filter_back.update(raw_back)
+
+            # 판정 임계값 (바른 자세 시 neck_angle은 0~10도 미만으로 나옴)
+            if neck_angle >= 22.0:
+                pose = "TURTLE_NECK" # 고개가 명확히 앞으로 숙여졌을 때만
+            elif has_hip and back_angle >= 25.0:
+                pose = "BENT_BACK"
+            else:
+                pose = "NORMAL"
+
+            controller.current_status = {
+                "pose": pose,
+                "neck_angle": neck_angle,
+                "back_angle": back_angle,
+                "updated_time": now_str
+            }
+        else:
+            controller.current_status = {
+                "pose": "POSE_LOST",
+                "neck_angle": 0.0,
+                "back_angle": 0.0,
+                "updated_time": now_str
+            }
+
+        time.sleep(0.05)
+
+finally:
+    picam2.stop()
