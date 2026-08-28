@@ -1,16 +1,12 @@
 import math
 
 class PostureEvaluator:
-    """임계값 설정 기반 자세 평가 및 상태 판정 클래스"""
-    
     @staticmethod
     def calculate_forward_neck_angle(p_ear, p_shoulder):
         dx = p_ear[0] - p_shoulder[0]
         dy = p_shoulder[1] - p_ear[1]
-        
         if dy <= 0:
             return 0.0
-        
         angle = math.degrees(math.atan2(dx, dy))
         return max(0.0, angle)
 
@@ -54,7 +50,6 @@ class PostureEvaluator:
             neck_angle = filter_neck.update(raw_neck)
             back_angle = filter_back.update(raw_back)
 
-            # YAML 임계값 적용
             neck_thresh = config.get('posture', {}).get('head_pitch_threshold_deg', 22.0)
             back_thresh = config.get('posture', {}).get('torso_angle_threshold_deg', 15.0)
 
