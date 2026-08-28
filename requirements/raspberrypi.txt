@@ -1,0 +1,6 @@
+opencv-python-headless
+numpy
+picamera2
+ai-edge-litert
+pyserial
+pyyaml
