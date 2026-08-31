@@ -36,6 +36,9 @@ HTML_TEMPLATE = """
         .phase-FAULT { background: #ffebee; color: #c62828; }
         .connection-ok { color: #2e7d32; }
         .connection-off { color: #c62828; }
+        .safety-ok { color: #2e7d32; }
+        .safety-stop { color: #c62828; }
+        .response-value { word-break: break-all; font-family: monospace; font-size: 12px !important; }
         .time { margin-top: 15px; font-size: 12px; color: #aaa; }
     </style>
 </head>
@@ -67,12 +70,28 @@ HTML_TEMPLATE = """
                     <span id="active-correction">NONE</span>
                 </div>
                 <div class="correction-item">
-                    <p>원위치 복귀까지</p>
+                    <p>원위치 복귀</p>
                     <span id="restore-remaining">-</span>
                 </div>
                 <div class="correction-item">
                     <p>Arduino 연결</p>
                     <span id="arduino-connection" class="connection-off">연결 안 됨</span>
+                </div>
+                <div class="correction-item">
+                    <p>비상정지</p>
+                    <span id="emergency-stop" class="safety-ok">정상</span>
+                </div>
+                <div class="correction-item">
+                    <p>전류 센서 / 기울기</p>
+                    <span><span id="current-sensor">-</span> / <span id="tilt-mm">-</span> mm</span>
+                </div>
+                <div class="correction-item" style="grid-column: 1 / -1;">
+                    <p>마지막 Arduino 응답</p>
+                    <span id="arduino-response" class="response-value">-</span>
+                </div>
+                <div class="correction-item" style="grid-column: 1 / -1;">
+                    <p>마지막 Arduino 오류</p>
+                    <span id="arduino-error" class="response-value safety-stop">-</span>
                 </div>
             </div>
         </div>
@@ -100,17 +119,33 @@ HTML_TEMPLATE = """
                     document.getElementById('active-correction').innerText =
                         data.active_correction || 'NONE';
 
-                    const remaining = data.restore_remaining_sec;
-                    document.getElementById('restore-remaining').innerText =
-                        Number.isFinite(remaining)
-                            ? remaining + '초'
-                            : (phase === 'APPLIED' ? '정상 자세 대기 중' : '-');
+                    const restoreText = phase === 'APPLIED'
+                        ? '정상 자세 대기 중'
+                        : (phase === 'RESTORING'
+                            ? '복귀 진행 중'
+                            : (phase === 'FAULT' ? '오류 확인 필요' : '-'));
+                    document.getElementById('restore-remaining').innerText = restoreText;
 
                     const connection = document.getElementById('arduino-connection');
                     connection.innerText = data.arduino_connected ? '연결됨' : '연결 안 됨';
                     connection.className = data.arduino_connected
                         ? 'connection-ok'
                         : 'connection-off';
+
+                    const emergencyStop = document.getElementById('emergency-stop');
+                    emergencyStop.innerText = data.emergency_stop ? '작동' : '정상';
+                    emergencyStop.className = data.emergency_stop
+                        ? 'safety-stop'
+                        : 'safety-ok';
+
+                    document.getElementById('current-sensor').innerText =
+                        Number.isFinite(data.current_sensor) ? data.current_sensor : '-';
+                    document.getElementById('tilt-mm').innerText =
+                        Number.isFinite(data.tilt_mm) ? data.tilt_mm.toFixed(2) : '-';
+                    document.getElementById('arduino-response').innerText =
+                        data.last_arduino_response || '-';
+                    document.getElementById('arduino-error').innerText =
+                        data.last_arduino_error || '-';
                 })
                 .catch(() => {
                     const connection = document.getElementById('arduino-connection');
@@ -141,6 +176,11 @@ def get_status():
         "active_correction": "NONE",
         "restore_remaining_sec": None,
         "arduino_connected": False,
+        "emergency_stop": False,
+        "current_sensor": None,
+        "tilt_mm": None,
+        "last_arduino_response": "",
+        "last_arduino_error": "",
         "updated_time": ""
     })
 

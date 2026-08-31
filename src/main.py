@@ -7,6 +7,7 @@ from datetime import datetime
 from camera.capture import CameraManager
 from pose.detector import PoseDetector, ExponentialFilter
 from posture.evaluator import PostureEvaluator
+from posture.command_coordinator import PostureCommandCoordinator
 from posture.hold_timer import BadPostureHoldTimer
 from actuator.serial_controller import SerialController
 from ui.server import start_server
@@ -18,6 +19,15 @@ class PoseController:
             "pose": "INIT",
             "neck_angle": 0.0,
             "back_angle": 0.0,
+            "correction_phase": "IDLE",
+            "active_correction": "NONE",
+            "restore_remaining_sec": None,
+            "arduino_connected": False,
+            "emergency_stop": False,
+            "current_sensor": None,
+            "tilt_mm": None,
+            "last_arduino_response": "",
+            "last_arduino_error": "",
             "updated_time": "-"
         }
 
@@ -56,21 +66,36 @@ def main():
     filter_back = ExponentialFilter(alpha=0.3)
     bad_duration_sec = config.get('posture', {}).get('bad_duration_sec', 60)
     bad_posture_timer = BadPostureHoldTimer(bad_duration_sec)
+    command_coordinator = PostureCommandCoordinator(serial_ctrl)
 
     cam_manager.start()
-    last_heartbeat = time.time()
+    last_heartbeat = time.monotonic()
+    last_status_request = time.monotonic() - 1.0
 
     try:
         while True:
             now_str = datetime.now().strftime("%H:%M:%S")
-            
-            if time.time() - last_heartbeat > 2.0:
+            now_monotonic = time.monotonic()
+
+            if now_monotonic - last_heartbeat > 2.0:
                 serial_ctrl.send_heartbeat()
-                last_heartbeat = time.time()
+                last_heartbeat = now_monotonic
+
+            if now_monotonic - last_status_request > 1.0:
+                serial_ctrl.send_status()
+                last_status_request = now_monotonic
 
             frame = cam_manager.capture_array()
             if frame is None:
                 bad_posture_timer.reset()
+                command_coordinator.update("POSE_LOST")
+                controller.current_status = {
+                    "pose": "POSE_LOST",
+                    "neck_angle": 0.0,
+                    "back_angle": 0.0,
+                    **serial_ctrl.get_status(),
+                    "updated_time": now_str,
+                }
                 time.sleep(0.1)
                 continue
 
@@ -81,18 +106,16 @@ def main():
                 filter_neck, filter_back, config
             )
 
+            critical_posture = bad_posture_timer.update(pose)
+            command_coordinator.update(pose, critical_posture)
+
             controller.current_status = {
                 "pose": pose,
                 "neck_angle": neck_angle,
                 "back_angle": back_angle,
-                "updated_time": now_str
+                **serial_ctrl.get_status(),
+                "updated_time": now_str,
             }
-
-            critical_posture = bad_posture_timer.update(pose)
-            if critical_posture is not None:
-                serial_ctrl.send_critical(critical_posture)
-            elif pose == "NORMAL":
-                serial_ctrl.send_normal()
 
             sample_interval = cam_cfg.get('sample_interval_sec', 0.05)
             time.sleep(sample_interval)
