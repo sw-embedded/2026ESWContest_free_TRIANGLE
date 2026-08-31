@@ -1,7 +1,7 @@
 # 🧠 자세 평가 및 노이즈 필터링 알고리즘
 
 ## 1. 노이즈 제거 (Exponential Smoothing Filter)
-프레임별 관절 측정값의 떨림(Jitter)을 방지하기 위해 지수 평활법을 적용합니다.
+프레임별 관절 측정값의 떨림(Jitter)을 방지하기 위해 지수 평활법을 적용한다.
 $$\text{Smoothed\_Val} = \alpha \times \text{Current\_Val} + (1 - \alpha) \times \text{Previous\_Val} \quad (\alpha = 0.3)$$
 
 ## 2. 관절 각도 계산 및 임계값
