@@ -5,5 +5,5 @@
 $$\text{Smoothed\_Val} = \alpha \times \text{Current\_Val} + (1 - \alpha) \times \text{Previous\_Val} \quad (\alpha = 0.3)$$
 
 ## 2. 관절 각도 계산 및 임계값
-- **목 전방 경사각 (Neck Angle)**: 귀(Ear)와 어깨(Shoulder) 위치 간 X/Y 축 차이를 삼각함수($\arctan$)로 산출 (임계값: $22^\circ$)
-- **몸통 경사각 (Back Angle)**: 어깨(Shoulder)와 엉덩이(Hip) 관절 위치 수직 대비 기울기 산출 (임계값: $15^\circ$)
+- **목 전방 경사각 (Neck Angle)**: 귀와 어깨 위치 간 X/Y 축 차이를 삼각함수($\arctan$)로 산출 (임계값: $22^\circ$)
+- **몸통 경사각 (Back Angle)**: 어깨와 엉덩이 관절 위치 수직 대비 기울기 산출 (임계값: $15^\circ$)
