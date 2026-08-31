@@ -11,6 +11,7 @@ pose:
 posture:
   head_pitch_threshold_deg: 22.0
   torso_angle_threshold_deg: 15.0
+  bad_duration_sec: 60
 
 actuator:
   enabled: true

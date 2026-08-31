@@ -7,6 +7,7 @@ from datetime import datetime
 from camera.capture import CameraManager
 from pose.detector import PoseDetector, ExponentialFilter
 from posture.evaluator import PostureEvaluator
+from posture.hold_timer import BadPostureHoldTimer
 from actuator.serial_controller import SerialController
 from ui.server import start_server
 
@@ -53,6 +54,8 @@ def main():
 
     filter_neck = ExponentialFilter(alpha=0.3)
     filter_back = ExponentialFilter(alpha=0.3)
+    bad_duration_sec = config.get('posture', {}).get('bad_duration_sec', 60)
+    bad_posture_timer = BadPostureHoldTimer(bad_duration_sec)
 
     cam_manager.start()
     last_heartbeat = time.time()
@@ -67,6 +70,7 @@ def main():
 
             frame = cam_manager.capture_array()
             if frame is None:
+                bad_posture_timer.reset()
                 time.sleep(0.1)
                 continue
 
@@ -84,8 +88,9 @@ def main():
                 "updated_time": now_str
             }
 
-            if pose in ["TURTLE_NECK", "BENT_BACK"]:
-                serial_ctrl.send_critical(pose)
+            critical_posture = bad_posture_timer.update(pose)
+            if critical_posture is not None:
+                serial_ctrl.send_critical(critical_posture)
             elif pose == "NORMAL":
                 serial_ctrl.send_normal()
 

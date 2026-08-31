@@ -2,7 +2,7 @@ camera:
   sample_interval_sec: 10
 
 posture:
-  bad_duration_sec: 300
+  bad_duration_sec: 60
 
 warning:
   duration_sec: 10
