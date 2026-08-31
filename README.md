@@ -13,11 +13,11 @@ pip install -r requirements/raspberrypi.txt
 python src/main.py
 ---
 
-## 📁 2. 문서 파트 (`docs/`)
+ 📁 2. 문서 파트 (`docs/`)
 
-### 📄 `docs/architecture.md`
+ 📄 `docs/architecture.md`
 ```markdown
-# 🏗️ 시스템 아키텍처 및 소프트웨어 설계
+ 🏗️ 시스템 아키텍처 및 소프트웨어 설계
 
 ## 1. 시스템 구조
 본 프로젝트는 라즈베리파이(Vision 및 메인 제어)와 아두이노 Uno R3(모터 및 안전 센서 제어)가 시리얼 통신으로 연결된 하이브리드 임베디드 시스템입니다.
