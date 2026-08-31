@@ -18,23 +18,16 @@
 
 // ----------------------------- 핀 배치 ---------------------------------
 
-const uint8_t PIN_STEP = 2;
-const uint8_t PIN_DIR = 3;
-const uint8_t PIN_STEP_ENABLE = 4;   // A4988 ENABLE, LOW 활성
+const uint8_t PIN_DIR = 2;
+const uint8_t PIN_STEP = 3;
 
-const uint8_t PIN_ACTUATOR_PWM = 5;  // L298N ENA, ENA 점퍼 제거
-const uint8_t PIN_ACTUATOR_IN1 = 6;
-const uint8_t PIN_ACTUATOR_IN2 = 7;
+const uint8_t PIN_ACTUATOR_IN1 = 7;
+const uint8_t PIN_ACTUATOR_IN2 = 8;
 
-const uint8_t PIN_TILT_BOTTOM_LIMIT = 8;
-const uint8_t PIN_TILT_TOP_LIMIT = 9;
-const uint8_t PIN_HEIGHT_TOP_LIMIT = 10;
-const uint8_t PIN_HEIGHT_BOTTOM_LIMIT = 11;
 const uint8_t PIN_EMERGENCY_STOP = 12;
 const uint8_t PIN_CURRENT_SENSOR = A0;
 
-// 센서를 연결하지 않은 무부하 벤치 시험에서만 false로 변경한다.
-// D8~D11 리미트 입력은 사용하지 않고 D12 비상정지만 사용한다.
+// 물리 리미트 스위치는 사용하지 않고 소프트웨어 이동 제한을 사용한다.
 const bool LIMIT_SWITCHES_ENABLED = false;
 const bool EMERGENCY_STOP_ENABLED = true;
 const bool CURRENT_SENSOR_ENABLED = true;
@@ -42,12 +35,12 @@ const bool CURRENT_SENSOR_ENABLED = true;
 // --------------------------- 기구 설정 ---------------------------------
 
 const float MOTOR_FULL_STEPS_PER_REV = 200.0f;
-const float MICROSTEPS = 8.0f;              // MS1=HIGH, MS2=HIGH, MS3=LOW
+const float MICROSTEPS = 1.0f;              // MS1/MS2/MS3 미연결: Full-Step
 const float LEAD_SCREW_MM_PER_REV = 8.0f;   // T8x8
 const float TILT_STEPS_PER_MM =
     (MOTOR_FULL_STEPS_PER_REV * MICROSTEPS) / LEAD_SCREW_MM_PER_REV;
 
-// 실제 기구가 반대로 움직이면 HIGH를 LOW로 변경한다.
+// 실제 설치 방향에 따라 HIGH/LOW를 조정한다.
 const uint8_t TILT_UP_DIR_LEVEL = HIGH;
 
 // 실제 기구에서 보수적으로 실측·보정해야 하는 값이다.
@@ -58,10 +51,6 @@ const unsigned long AUTO_HEIGHT_ADJUST_MS = 1500UL;
 
 // 100 mm / 9.5 mm/s의 이론값을 올림한 최대 구동 시간이다.
 const unsigned long ACTUATOR_MAX_RUN_MS = 10527UL;
-const uint8_t ACTUATOR_RUN_PWM = 180;
-const uint8_t ACTUATOR_REVERSE_PWM = 100;
-const unsigned long ACTUATOR_PWM_RAMP_INTERVAL_MS = 20UL;
-const uint8_t ACTUATOR_PWM_RAMP_STEP = 5;
 
 // 무부하/정상 하중/구속 상태를 측정한 뒤 실제 센서에 맞게 보정한다.
 const int CURRENT_THRESHOLD = 500;
@@ -84,12 +73,11 @@ enum TiltMode {
 };
 
 enum HeightMode {
-  HEIGHT_STOPPED,
-  HEIGHT_UP,
-  HEIGHT_DOWN,
-  HEIGHT_BRAKING,
-  HEIGHT_SAFETY_PAUSE,
-  HEIGHT_SAFETY_REVERSING
+  HEIGHT_STOPPED = 0,
+  HEIGHT_UP = 1,
+  HEIGHT_DOWN = 2,
+  HEIGHT_SAFETY_PAUSE = 4,
+  HEIGHT_SAFETY_REVERSING = 5
 };
 
 enum CorrectionType {
@@ -123,12 +111,8 @@ unsigned long tiltMotionStartedMs = 0;
 
 unsigned long heightMotionStartedMs = 0;
 unsigned long heightRequestedRunMs = 0;
-unsigned long lastHeightPwmUpdateMs = 0;
 unsigned long lastCurrentSampleMs = 0;
-uint8_t currentHeightPwm = 0;
-uint8_t targetHeightPwm = 0;
 uint8_t overcurrentSamples = 0;
-const __FlashStringHelper *heightBrakeReason = NULL;
 
 unsigned long lastValidCommandMs = 0;
 
@@ -145,19 +129,19 @@ bool inputActive(uint8_t pin) {
 }
 
 bool tiltBottomLimitActive() {
-  return LIMIT_SWITCHES_ENABLED && inputActive(PIN_TILT_BOTTOM_LIMIT);
+  return false;
 }
 
 bool tiltTopLimitActive() {
-  return LIMIT_SWITCHES_ENABLED && inputActive(PIN_TILT_TOP_LIMIT);
+  return false;
 }
 
 bool heightTopLimitActive() {
-  return LIMIT_SWITCHES_ENABLED && inputActive(PIN_HEIGHT_TOP_LIMIT);
+  return false;
 }
 
 bool heightBottomLimitActive() {
-  return LIMIT_SWITCHES_ENABLED && inputActive(PIN_HEIGHT_BOTTOM_LIMIT);
+  return false;
 }
 
 bool emergencyStopActive() {
@@ -165,9 +149,7 @@ bool emergencyStopActive() {
 }
 
 bool limitConflictActive() {
-  return LIMIT_SWITCHES_ENABLED &&
-         ((tiltBottomLimitActive() && tiltTopLimitActive()) ||
-          (heightBottomLimitActive() && heightTopLimitActive()));
+  return false;
 }
 
 bool anyMotionActive() {
@@ -190,10 +172,6 @@ float stepsToMm(long steps) {
 unsigned long speedToStepIntervalUs(float millimetersPerSecond) {
   const float stepsPerSecond = millimetersPerSecond * TILT_STEPS_PER_MM;
   return (unsigned long)(1000000.0f / stepsPerSecond);
-}
-
-void enableStepper(bool enabled) {
-  digitalWrite(PIN_STEP_ENABLE, enabled ? LOW : HIGH);
 }
 
 void printCorrectionType(CorrectionType type) {
@@ -249,7 +227,6 @@ void stopTilt(const __FlashStringHelper *reason) {
   const bool wasMoving = tiltMode != TILT_IDLE;
   tiltMode = TILT_IDLE;
   digitalWrite(PIN_STEP, LOW);
-  enableStepper(false);
 
   if (wasMoving) {
     Serial.print(F("TILT_STOP "));
@@ -259,14 +236,10 @@ void stopTilt(const __FlashStringHelper *reason) {
 
 void stopHeightNow(const __FlashStringHelper *reason) {
   const bool wasMoving = heightMode != HEIGHT_STOPPED;
-  analogWrite(PIN_ACTUATOR_PWM, 0);
   digitalWrite(PIN_ACTUATOR_IN1, LOW);
   digitalWrite(PIN_ACTUATOR_IN2, LOW);
   heightMode = HEIGHT_STOPPED;
   heightTravelDirection = HEIGHT_STOPPED;
-  currentHeightPwm = 0;
-  targetHeightPwm = 0;
-  heightBrakeReason = NULL;
   overcurrentSamples = 0;
 
   if (wasMoving) {
@@ -358,7 +331,6 @@ void startTiltHome() {
   tiltStepIntervalUs = speedToStepIntervalUs(TILT_SPEED_MM_PER_SEC);
   tiltMotionStartedMs = millis();
   lastTiltStepUs = micros();
-  enableStepper(true);
   Serial.println(F("OK HOME"));
 }
 
@@ -412,7 +384,6 @@ bool startTiltMoveMm(float targetMm,
   tiltStepIntervalUs = speedToStepIntervalUs(TILT_SPEED_MM_PER_SEC);
   tiltMotionStartedMs = millis();
   lastTiltStepUs = micros();
-  enableStepper(true);
   Serial.print(F("OK "));
   Serial.println(acceptedCommand);
   return true;
@@ -536,23 +507,10 @@ bool startHeight(HeightMode direction, unsigned long requestedMs) {
   heightTravelDirection = direction;
   heightRequestedRunMs = requestedMs;
   heightMotionStartedMs = millis();
-  lastHeightPwmUpdateMs = millis();
   lastCurrentSampleMs = millis();
-  currentHeightPwm = 0;
-  targetHeightPwm = ACTUATOR_RUN_PWM;
   overcurrentSamples = 0;
-  analogWrite(PIN_ACTUATOR_PWM, 0);
   Serial.println(F("OK HEIGHT"));
   return true;
-}
-
-void beginHeightSoftStop(const __FlashStringHelper *reason) {
-  if (heightMode == HEIGHT_STOPPED || heightMode == HEIGHT_BRAKING) {
-    return;
-  }
-  heightMode = HEIGHT_BRAKING;
-  targetHeightPwm = 0;
-  heightBrakeReason = reason;
 }
 
 void startSafetyReversePause() {
@@ -570,43 +528,7 @@ void startSafetyReverse() {
   heightMode = HEIGHT_SAFETY_REVERSING;
   heightTravelDirection = HEIGHT_DOWN;
   heightMotionStartedMs = millis();
-  currentHeightPwm = ACTUATOR_REVERSE_PWM;
-  targetHeightPwm = ACTUATOR_REVERSE_PWM;
-  analogWrite(PIN_ACTUATOR_PWM, currentHeightPwm);
   Serial.println(F("OK SAFETY_REVERSE"));
-}
-
-void updateHeightPwm() {
-  if (heightMode == HEIGHT_STOPPED ||
-      heightMode == HEIGHT_SAFETY_PAUSE ||
-      heightMode == HEIGHT_SAFETY_REVERSING) {
-    return;
-  }
-
-  const unsigned long nowMs = millis();
-  if (nowMs - lastHeightPwmUpdateMs < ACTUATOR_PWM_RAMP_INTERVAL_MS) {
-    return;
-  }
-  lastHeightPwmUpdateMs = nowMs;
-
-  if (currentHeightPwm < targetHeightPwm) {
-    const uint16_t nextPwm = currentHeightPwm + ACTUATOR_PWM_RAMP_STEP;
-    currentHeightPwm =
-        nextPwm > targetHeightPwm ? targetHeightPwm : (uint8_t)nextPwm;
-  } else if (currentHeightPwm > targetHeightPwm) {
-    currentHeightPwm =
-        currentHeightPwm > ACTUATOR_PWM_RAMP_STEP
-            ? currentHeightPwm - ACTUATOR_PWM_RAMP_STEP
-            : 0;
-  }
-  analogWrite(PIN_ACTUATOR_PWM, currentHeightPwm);
-
-  if (heightMode == HEIGHT_BRAKING && currentHeightPwm == 0) {
-    const __FlashStringHelper *reason = heightBrakeReason;
-    stopHeightNow(reason == NULL ? F("BRAKE") : reason);
-    Serial.println(F("DONE HEIGHT"));
-    finishCorrectionMotion();
-  }
 }
 
 void updateHeight() {
@@ -622,8 +544,7 @@ void updateHeight() {
     return;
   }
 
-  if ((heightMode == HEIGHT_UP || heightMode == HEIGHT_DOWN ||
-       heightMode == HEIGHT_BRAKING) &&
+  if ((heightMode == HEIGHT_UP || heightMode == HEIGHT_DOWN) &&
       CURRENT_SENSOR_ENABLED &&
       millis() - lastCurrentSampleMs >= CURRENT_SAMPLE_INTERVAL_MS) {
     lastCurrentSampleMs = millis();
@@ -649,7 +570,10 @@ void updateHeight() {
 
   if ((heightMode == HEIGHT_UP || heightMode == HEIGHT_DOWN) &&
       millis() - heightMotionStartedMs >= heightRequestedRunMs) {
-    beginHeightSoftStop(F("TIME"));
+    stopHeightNow(F("TIME"));
+    Serial.println(F("DONE HEIGHT"));
+    finishCorrectionMotion();
+    return;
   } else if (heightMode == HEIGHT_SAFETY_PAUSE &&
              millis() - heightMotionStartedMs >= SAFETY_REVERSE_PAUSE_MS) {
     if (emergencyStopActive() || heightBottomLimitActive()) {
@@ -665,7 +589,6 @@ void updateHeight() {
     return;
   }
 
-  updateHeightPwm();
 }
 
 // ---------------------- 자세 교정 및 원위치 복귀 -------------------------
@@ -979,21 +902,14 @@ void readSerialCommands() {
 // ---------------------- 아두이노 시작 및 반복 실행 -------------------------
 
 void setup() {
-  pinMode(PIN_STEP, OUTPUT);
   pinMode(PIN_DIR, OUTPUT);
-  pinMode(PIN_STEP_ENABLE, OUTPUT);
-  pinMode(PIN_ACTUATOR_PWM, OUTPUT);
+  pinMode(PIN_STEP, OUTPUT);
   pinMode(PIN_ACTUATOR_IN1, OUTPUT);
   pinMode(PIN_ACTUATOR_IN2, OUTPUT);
 
-  pinMode(PIN_TILT_BOTTOM_LIMIT, INPUT_PULLUP);
-  pinMode(PIN_TILT_TOP_LIMIT, INPUT_PULLUP);
-  pinMode(PIN_HEIGHT_TOP_LIMIT, INPUT_PULLUP);
-  pinMode(PIN_HEIGHT_BOTTOM_LIMIT, INPUT_PULLUP);
   pinMode(PIN_EMERGENCY_STOP, INPUT_PULLUP);
 
   digitalWrite(PIN_STEP, LOW);
-  enableStepper(false);
   stopHeightNow(F("BOOT"));
 
   Serial.begin(9600);
