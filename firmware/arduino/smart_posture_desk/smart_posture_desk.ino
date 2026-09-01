@@ -47,7 +47,10 @@ const uint8_t TILT_UP_DIR_LEVEL = HIGH;
 const float TILT_MAX_TRAVEL_MM = 100.0f;
 const float TILT_SPEED_MM_PER_SEC = 4.0f;
 const float AUTO_TILT_DELTA_MM = 5.0f;
-const unsigned long AUTO_HEIGHT_ADJUST_MS = 1500UL;
+const unsigned long AUTO_TILT_UP_MS = 10000UL;
+const unsigned long AUTO_TILT_DOWN_MS = 6000UL;
+const unsigned long AUTO_HEIGHT_UP_MS = 4000UL;
+const unsigned long AUTO_HEIGHT_DOWN_MS = 4000UL;
 
 // 100 mm / 9.5 mm/s의 이론값을 올림한 최대 구동 시간이다.
 const unsigned long ACTUATOR_MAX_RUN_MS = 10527UL;
@@ -172,6 +175,11 @@ float stepsToMm(long steps) {
 unsigned long speedToStepIntervalUs(float millimetersPerSecond) {
   const float stepsPerSecond = millimetersPerSecond * TILT_STEPS_PER_MM;
   return (unsigned long)(1000000.0f / stepsPerSecond);
+}
+
+unsigned long durationToStepIntervalUs(long steps,
+                                       unsigned long durationMs) {
+  return (durationMs * 1000UL) / (unsigned long)labs(steps);
 }
 
 void printCorrectionType(CorrectionType type) {
@@ -378,10 +386,22 @@ bool startTiltMoveMm(float targetMm,
 
   const uint8_t directionLevel =
       movingUp ? TILT_UP_DIR_LEVEL : (TILT_UP_DIR_LEVEL == HIGH ? LOW : HIGH);
+  delay(4000);
+  lastValidCommandMs = millis();
   digitalWrite(PIN_DIR, directionLevel);
 
   tiltMode = TILT_MOVING;
-  tiltStepIntervalUs = speedToStepIntervalUs(TILT_SPEED_MM_PER_SEC);
+  if (correctionType == CORRECTION_TURTLE_NECK &&
+      correctionPhase == CORRECTION_APPLYING) {
+    tiltStepIntervalUs = durationToStepIntervalUs(
+        tiltTargetSteps - tiltPositionSteps, AUTO_TILT_UP_MS);
+  } else if (correctionType == CORRECTION_TURTLE_NECK &&
+             correctionPhase == CORRECTION_RESTORING) {
+    tiltStepIntervalUs = durationToStepIntervalUs(
+        tiltTargetSteps - tiltPositionSteps, AUTO_TILT_DOWN_MS);
+  } else {
+    tiltStepIntervalUs = speedToStepIntervalUs(TILT_SPEED_MM_PER_SEC);
+  }
   tiltMotionStartedMs = millis();
   lastTiltStepUs = micros();
   Serial.print(F("OK "));
@@ -630,7 +650,7 @@ void startPostureCorrection(CorrectionType requestedType) {
                               F("CORRECTION_TURTLE_NECK"));
   } else if (requestedType == CORRECTION_BENT_BACK) {
     // 굽은 허리: 책상이 낮다고 보고 높이를 제한된 시간만 올린다.
-    started = startHeight(HEIGHT_UP, AUTO_HEIGHT_ADJUST_MS);
+    started = startHeight(HEIGHT_UP, AUTO_HEIGHT_UP_MS);
   }
 
   if (!started) {
@@ -664,7 +684,7 @@ void startRestore() {
                               F("RESTORE_TILT"));
   } else if (correctionType == CORRECTION_BENT_BACK) {
     // 위치 센서가 없으므로 올린 시간과 같은 시간만큼 하강한다.
-    started = startHeight(HEIGHT_DOWN, AUTO_HEIGHT_ADJUST_MS);
+    started = startHeight(HEIGHT_DOWN, AUTO_HEIGHT_DOWN_MS);
   }
 
   if (!started) {
