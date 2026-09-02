@@ -17,3 +17,7 @@ actuator:
   enabled: true
   port: /dev/ttyACM0
   baudrate: 9600
+  heartbeat_interval_sec: 2.0
+  status_interval_sec: 1.0
+  response_timeout_sec: 6.0
+  reconnect_interval_sec: 2.0

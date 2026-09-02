@@ -12,9 +12,11 @@ class FakeSerialController:
 
     def send_critical(self, posture_type):
         self.critical_commands.append(posture_type)
+        return True
 
     def send_normal(self):
         self.normal_count += 1
+        return True
 
     def send_restore(self):
         self.restore_count += 1
@@ -76,6 +78,42 @@ class PostureCommandCoordinatorTest(unittest.TestCase):
 
         self.assertEqual(serial_controller.normal_count, 2)
         self.assertEqual(serial_controller.restore_count, 2)
+
+    def test_retries_restore_after_a_temporary_send_failure(self):
+        serial_controller = FakeSerialController()
+        coordinator = PostureCommandCoordinator(serial_controller)
+        attempts = [False, True]
+
+        def send_restore():
+            serial_controller.restore_count += 1
+            return attempts.pop(0)
+
+        serial_controller.send_restore = send_restore
+        serial_controller.phase = "APPLIED"
+
+        coordinator.update("NORMAL")
+        coordinator.update("NORMAL")
+
+        self.assertEqual(serial_controller.restore_count, 2)
+
+    def test_retries_critical_command_after_a_temporary_send_failure(self):
+        serial_controller = FakeSerialController()
+        coordinator = PostureCommandCoordinator(serial_controller)
+        attempts = [False, True]
+
+        def send_critical(posture_type):
+            serial_controller.critical_commands.append(posture_type)
+            return attempts.pop(0)
+
+        serial_controller.send_critical = send_critical
+
+        coordinator.update("TURTLE_NECK", "TURTLE_NECK")
+        coordinator.update("TURTLE_NECK")
+
+        self.assertEqual(
+            serial_controller.critical_commands,
+            ["TURTLE_NECK", "TURTLE_NECK"],
+        )
 
 
 if __name__ == "__main__":

@@ -18,6 +18,8 @@ class ArduinoState:
             "height_mode": None,
             "last_arduino_response": "",
             "last_arduino_error": "",
+            "serial_error": "",
+            "watchdog_timeout_sec": None,
         }
 
     def snapshot(self):
@@ -28,7 +30,9 @@ class ArduinoState:
         with self._lock:
             self._status["arduino_connected"] = bool(connected)
             if error:
-                self._status["last_arduino_error"] = str(error)
+                self._status["serial_error"] = str(error)
+            elif connected:
+                self._status["serial_error"] = ""
 
     def record_correction_requested(self, posture_type):
         with self._lock:
@@ -48,6 +52,7 @@ class ArduinoState:
 
         with self._lock:
             self._status["arduino_connected"] = True
+            self._status["serial_error"] = ""
             self._status["last_arduino_response"] = line
 
             if line.startswith("READY "):
@@ -96,6 +101,14 @@ class ArduinoState:
         self._set_number(values, "TILT_MM", "tilt_mm", float)
         self._set_number(values, "TILT_MODE", "tilt_mode", int)
         self._set_number(values, "HEIGHT_MODE", "height_mode", int)
+
+        if "WATCHDOG_MS" in values:
+            try:
+                self._status["watchdog_timeout_sec"] = (
+                    int(values["WATCHDOG_MS"]) / 1000.0
+                )
+            except ValueError:
+                pass
 
         if "ESTOP" in values:
             self._status["emergency_stop"] = values["ESTOP"] == "1"

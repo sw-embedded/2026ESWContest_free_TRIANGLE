@@ -10,26 +10,8 @@ from posture.evaluator import PostureEvaluator
 from posture.command_coordinator import PostureCommandCoordinator
 from posture.hold_timer import BadPostureHoldTimer
 from actuator.serial_controller import SerialController
+from monitor.status import PoseController
 from ui.server import start_server
-
-
-class PoseController:
-    def __init__(self):
-        self.current_status = {
-            "pose": "INIT",
-            "neck_angle": 0.0,
-            "back_angle": 0.0,
-            "correction_phase": "IDLE",
-            "active_correction": "NONE",
-            "restore_remaining_sec": None,
-            "arduino_connected": False,
-            "emergency_stop": False,
-            "current_sensor": None,
-            "tilt_mm": None,
-            "last_arduino_response": "",
-            "last_arduino_error": "",
-            "updated_time": "-"
-        }
 
 
 def load_config(config_path="config/default.yaml"):
@@ -59,8 +41,13 @@ def main():
     serial_ctrl = SerialController(
         port=act_cfg.get('port', '/dev/ttyACM0'),
         baudrate=act_cfg.get('baudrate', 9600),
-        enabled=act_cfg.get('enabled', True)
+        enabled=act_cfg.get('enabled', True),
+        heartbeat_interval_sec=act_cfg.get('heartbeat_interval_sec', 2.0),
+        status_interval_sec=act_cfg.get('status_interval_sec', 1.0),
+        response_timeout_sec=act_cfg.get('response_timeout_sec', 6.0),
+        reconnect_interval_sec=act_cfg.get('reconnect_interval_sec', 2.0),
     )
+    controller.attach_serial_controller(serial_ctrl)
 
     filter_neck = ExponentialFilter(alpha=0.3)
     filter_back = ExponentialFilter(alpha=0.3)
@@ -69,33 +56,16 @@ def main():
     command_coordinator = PostureCommandCoordinator(serial_ctrl)
 
     cam_manager.start()
-    last_heartbeat = time.monotonic()
-    last_status_request = time.monotonic() - 1.0
 
     try:
         while True:
             now_str = datetime.now().strftime("%H:%M:%S")
-            now_monotonic = time.monotonic()
-
-            if now_monotonic - last_heartbeat > 2.0:
-                serial_ctrl.send_heartbeat()
-                last_heartbeat = now_monotonic
-
-            if now_monotonic - last_status_request > 1.0:
-                serial_ctrl.send_status()
-                last_status_request = now_monotonic
 
             frame = cam_manager.capture_array()
             if frame is None:
                 bad_posture_timer.reset()
                 command_coordinator.update("POSE_LOST")
-                controller.current_status = {
-                    "pose": "POSE_LOST",
-                    "neck_angle": 0.0,
-                    "back_angle": 0.0,
-                    **serial_ctrl.get_status(),
-                    "updated_time": now_str,
-                }
+                controller.update_pose("POSE_LOST", 0.0, 0.0, now_str)
                 time.sleep(0.1)
                 continue
 
@@ -109,13 +79,9 @@ def main():
             critical_posture = bad_posture_timer.update(pose)
             command_coordinator.update(pose, critical_posture)
 
-            controller.current_status = {
-                "pose": pose,
-                "neck_angle": neck_angle,
-                "back_angle": back_angle,
-                **serial_ctrl.get_status(),
-                "updated_time": now_str,
-            }
+            controller.update_pose(
+                pose, neck_angle, back_angle, now_str
+            )
 
             sample_interval = cam_cfg.get('sample_interval_sec', 0.05)
             time.sleep(sample_interval)

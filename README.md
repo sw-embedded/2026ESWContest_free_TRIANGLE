@@ -24,7 +24,7 @@ python src/main.py
 
 - Vision / Main: Picamera2 + MoveNet TFLite (자세 추정 및 각도 판정)
 - Monitoring: Web Server 기반 실시간 상태 모니터링
-- Actuator / Safety: A4988(상판 기울기 축), L298N(책상 높이 축), 과부하 전류 센서 및 리밋 스위치
+- Actuator / Safety: A4988(상판 기울기 축), L298N(책상 높이 축), 소프트웨어 이동 제한, 과부하 전류 센서 및 비상정지 스위치
 
 ## 2. 소프트웨어 파이프라인
 1. `CameraManager`: 카메라 영상 프레임 실시간 캡처 (640x480, RGB888)

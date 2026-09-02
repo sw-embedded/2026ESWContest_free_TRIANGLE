@@ -78,6 +78,10 @@ HTML_TEMPLATE = """
                     <span id="arduino-connection" class="connection-off">연결 안 됨</span>
                 </div>
                 <div class="correction-item">
+                    <p>응답 경과 / Watchdog</p>
+                    <span><span id="response-age">-</span>초 / <span id="watchdog-timeout">-</span>초</span>
+                </div>
+                <div class="correction-item">
                     <p>비상정지</p>
                     <span id="emergency-stop" class="safety-ok">정상</span>
                 </div>
@@ -93,6 +97,10 @@ HTML_TEMPLATE = """
                     <p>마지막 Arduino 오류</p>
                     <span id="arduino-error" class="response-value safety-stop">-</span>
                 </div>
+                <div class="correction-item" style="grid-column: 1 / -1;">
+                    <p>시리얼 연결 오류</p>
+                    <span id="serial-error" class="response-value safety-stop">-</span>
+                </div>
             </div>
         </div>
         <div class="time">최종 갱신 시간: <span id="update-time">-</span></div>
@@ -100,7 +108,7 @@ HTML_TEMPLATE = """
 
     <script>
         function fetchStatus() {
-            fetch('/api/status')
+            fetch('/api/status', {cache: 'no-store'})
                 .then(response => response.json())
                 .then(data => {
                     document.getElementById('pose-text').innerText = data.pose;
@@ -146,6 +154,16 @@ HTML_TEMPLATE = """
                         data.last_arduino_response || '-';
                     document.getElementById('arduino-error').innerText =
                         data.last_arduino_error || '-';
+                    document.getElementById('serial-error').innerText =
+                        data.serial_error || '-';
+                    document.getElementById('response-age').innerText =
+                        Number.isFinite(data.arduino_response_age_sec)
+                            ? data.arduino_response_age_sec.toFixed(1)
+                            : '-';
+                    document.getElementById('watchdog-timeout').innerText =
+                        Number.isFinite(data.watchdog_timeout_sec)
+                            ? data.watchdog_timeout_sec
+                            : '-';
                 })
                 .catch(() => {
                     const connection = document.getElementById('arduino-connection');
@@ -167,22 +185,31 @@ def index():
 @app.route('/api/status')
 def get_status():
     if controller_instance:
-        return jsonify(controller_instance.current_status)
-    return jsonify({
-        "pose": "UNKNOWN",
-        "neck_angle": 0,
-        "back_angle": 0,
-        "correction_phase": "IDLE",
-        "active_correction": "NONE",
-        "restore_remaining_sec": None,
-        "arduino_connected": False,
-        "emergency_stop": False,
-        "current_sensor": None,
-        "tilt_mm": None,
-        "last_arduino_response": "",
-        "last_arduino_error": "",
-        "updated_time": ""
-    })
+        getter = getattr(controller_instance, "get_status", None)
+        status = getter() if getter else controller_instance.current_status
+    else:
+        status = {
+            "pose": "UNKNOWN",
+            "neck_angle": 0,
+            "back_angle": 0,
+            "correction_phase": "IDLE",
+            "active_correction": "NONE",
+            "restore_remaining_sec": None,
+            "arduino_connected": False,
+            "emergency_stop": False,
+            "current_sensor": None,
+            "tilt_mm": None,
+            "last_arduino_response": "",
+            "last_arduino_error": "",
+            "serial_error": "",
+            "serial_port": "",
+            "arduino_response_age_sec": None,
+            "watchdog_timeout_sec": None,
+            "updated_time": "",
+        }
+    response = jsonify(status)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 def start_server(ctrl_obj):
     global controller_instance

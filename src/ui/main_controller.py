@@ -1,60 +1,44 @@
-import serial
 import time
 
+
+from actuator.serial_controller import SerialController
+from monitor.status import PoseController
+
+
 class SystemController:
+    """이전 UI 호출부를 현재 줄 단위 Arduino 프로토콜에 연결하는 어댑터."""
+
     def __init__(self, port='/dev/ttyACM0', baudrate=9600):
         self.port = port
         self.baudrate = baudrate
-        self.ser = None
-        
-        # 실시간 상태 저장 변수
-        self.current_status = {
-            "pose": "NORMAL",
-            "neck_angle": 0,
-            "back_angle": 0,
-            "last_command": "N",
-            "updated_time": ""
-        }
-        
-        # 직전 송신 신호 (중복 전송 방지용)
-        self.last_sent_command = None
-        self.init_serial()
+        self.serial_controller = SerialController(port=port, baudrate=baudrate)
+        self.status_controller = PoseController()
+        self.status_controller.attach_serial_controller(self.serial_controller)
+        self.last_sent_pose = None
 
-    def init_serial(self):
-        try:
-            self.ser = serial.Serial(self.port, self.baudrate, timeout=1)
-            time.sleep(2)
-            print(f"[System] 아두이노 연결 성공: {self.port}")
-        except Exception as e:
-            self.ser = None
-            print(f"[System] 아두이노 미연결 (테스트/대기 모드): {e}")
+    @property
+    def current_status(self):
+        return self.status_controller.get_status()
 
     def update_pose(self, pose_name, neck_angle, back_angle):
         """AI 결과값을 받아서 상태를 갱신하고 신호를 전달하는 메인 함수"""
-        self.current_status["pose"] = pose_name
-        self.current_status["neck_angle"] = int(neck_angle)
-        self.current_status["back_angle"] = int(back_angle)
-        self.current_status["updated_time"] = time.strftime("%H:%M:%S")
+        self.status_controller.update_pose(
+            pose_name,
+            int(neck_angle),
+            int(back_angle),
+            time.strftime("%H:%M:%S"),
+        )
 
-        # 신호 매핑
-        target_command = 'N'
-        if pose_name == "TURTLE_NECK":
-            target_command = 'T'
-        elif pose_name == "BENT_BACK":
-            target_command = 'B'
-
-        # 자세 상태가 변했을 때만 아두이노로 신호 1회 송신 (과부하 방지)
-        if target_command != self.last_sent_command:
-            self.send_to_arduino(target_command)
-            self.last_sent_command = target_command
-            self.current_status["last_command"] = target_command
-
-    def send_to_arduino(self, command_char):
-        if self.ser and self.ser.is_open:
-            try:
-                self.ser.write(command_char.encode())
-                print(f"[TX -> Arduino] 신호 전송: {command_char}")
-            except Exception as e:
-                print(f"[Error] 전송 실패: {e}")
+        if pose_name == self.last_sent_pose:
+            return
+        if pose_name == "NORMAL":
+            sent = self.serial_controller.send_normal()
+        elif pose_name in ("TURTLE_NECK", "BENT_BACK"):
+            sent = self.serial_controller.send_critical(pose_name)
         else:
-            print(f"[Mock TX] 신호: {command_char}")
+            sent = True
+        if sent:
+            self.last_sent_pose = pose_name
+
+    def close(self):
+        self.serial_controller.close()

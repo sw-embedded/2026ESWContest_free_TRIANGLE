@@ -62,8 +62,9 @@ const unsigned long CURRENT_SAMPLE_INTERVAL_MS = 10UL;
 const unsigned long SAFETY_REVERSE_PAUSE_MS = 100UL;
 const unsigned long SAFETY_REVERSE_MS = 300UL;
 
-const unsigned long COMMAND_WATCHDOG_MS = 3000UL;
+const unsigned long COMMAND_WATCHDOG_MS = 5UL * 60UL * 1000UL;
 const unsigned long TILT_MOTION_TIMEOUT_MS = 30000UL;
+const unsigned long TILT_START_DELAY_MS = 4000UL;
 const unsigned long SERIAL_IDLE_COMMAND_MS = 30UL;
 const uint8_t STEP_PULSE_US = 3;
 
@@ -72,7 +73,8 @@ const uint8_t STEP_PULSE_US = 3;
 enum TiltMode {
   TILT_IDLE,
   TILT_MOVING,
-  TILT_HOMING
+  TILT_HOMING,
+  TILT_WAITING
 };
 
 enum HeightMode {
@@ -289,7 +291,9 @@ void printStatus() {
   Serial.print(heightBottomLimitActive() ? 1 : 0);
   Serial.print(heightTopLimitActive() ? 1 : 0);
   Serial.print(F(" ESTOP="));
-  Serial.println(emergencyStopActive() ? 1 : 0);
+  Serial.print(emergencyStopActive() ? 1 : 0);
+  Serial.print(F(" WATCHDOG_MS="));
+  Serial.println(COMMAND_WATCHDOG_MS);
 }
 
 // -------------------------- 기울기 제어 ---------------------------------
@@ -386,11 +390,9 @@ bool startTiltMoveMm(float targetMm,
 
   const uint8_t directionLevel =
       movingUp ? TILT_UP_DIR_LEVEL : (TILT_UP_DIR_LEVEL == HIGH ? LOW : HIGH);
-  delay(4000);
-  lastValidCommandMs = millis();
   digitalWrite(PIN_DIR, directionLevel);
 
-  tiltMode = TILT_MOVING;
+  tiltMode = TILT_WAITING;
   if (correctionType == CORRECTION_TURTLE_NECK &&
       correctionPhase == CORRECTION_APPLYING) {
     tiltStepIntervalUs = durationToStepIntervalUs(
@@ -403,7 +405,6 @@ bool startTiltMoveMm(float targetMm,
     tiltStepIntervalUs = speedToStepIntervalUs(TILT_SPEED_MM_PER_SEC);
   }
   tiltMotionStartedMs = millis();
-  lastTiltStepUs = micros();
   Serial.print(F("OK "));
   Serial.println(acceptedCommand);
   return true;
@@ -411,6 +412,16 @@ bool startTiltMoveMm(float targetMm,
 
 void updateTilt() {
   if (tiltMode == TILT_IDLE) {
+    return;
+  }
+
+  if (tiltMode == TILT_WAITING) {
+    if (millis() - tiltMotionStartedMs < TILT_START_DELAY_MS) {
+      return;
+    }
+    tiltMode = TILT_MOVING;
+    tiltMotionStartedMs = millis();
+    lastTiltStepUs = micros();
     return;
   }
 
