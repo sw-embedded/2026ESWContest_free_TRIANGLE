@@ -20,7 +20,7 @@ class SerialController:
         start_reader=True,
         heartbeat_interval_sec=2.0,
         status_interval_sec=1.0,
-        response_timeout_sec=6.0,
+        response_timeout_sec=10.0,
         reconnect_interval_sec=2.0,
         clock=time.monotonic,
     ):

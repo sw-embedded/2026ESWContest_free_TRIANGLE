@@ -10,8 +10,8 @@ class ArduinoStateTest(unittest.TestCase):
         state.handle_line(
             "STATUS TILT_ZERO_SET=1 TILT_MM=5.00 TILT_MODE=0 "
             "HEIGHT_MODE=0 CORRECTION_TYPE=TURTLE_NECK "
-            "CORRECTION_PHASE=APPLIED CURRENT=487 LIMITS=0000 ESTOP=1 "
-            "WATCHDOG_MS=300000"
+            "CORRECTION_PHASE=APPLIED CURRENT=487 ESTOP=1 "
+            "WATCHDOG_MS=3000"
         )
 
         status = state.snapshot()
@@ -23,7 +23,7 @@ class ArduinoStateTest(unittest.TestCase):
         self.assertEqual(status["tilt_mode"], 0)
         self.assertEqual(status["height_mode"], 0)
         self.assertTrue(status["emergency_stop"])
-        self.assertEqual(status["watchdog_timeout_sec"], 300.0)
+        self.assertEqual(status["watchdog_timeout_sec"], 3.0)
 
     def test_tracks_correction_and_restore_lifecycle(self):
         state = ArduinoState()

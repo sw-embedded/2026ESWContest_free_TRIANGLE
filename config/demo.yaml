@@ -3,9 +3,4 @@ camera:
 
 posture:
   bad_duration_sec: 60
-
-warning:
-  duration_sec: 10
-
-actuator:
-  motor_run_sec: 30
+  normal_restore_delay_sec: 300

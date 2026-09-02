@@ -1,6 +1,6 @@
 opencv-python-headless
 numpy
-picamera2
+# Picamera2/libcamera는 Raspberry Pi OS의 apt 패키지로 설치합니다.
 ai-edge-litert
 pyserial
 pyyaml

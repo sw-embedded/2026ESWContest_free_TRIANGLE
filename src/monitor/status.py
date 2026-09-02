@@ -13,7 +13,6 @@ class PoseController:
             "back_angle": 0.0,
             "correction_phase": "IDLE",
             "active_correction": "NONE",
-            "restore_remaining_sec": None,
             "arduino_connected": False,
             "emergency_stop": False,
             "current_sensor": None,

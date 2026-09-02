@@ -1,8 +1,8 @@
 import time
 import threading
 import yaml
-import os
 from datetime import datetime
+from pathlib import Path
 
 from camera.capture import CameraManager
 from pose.detector import PoseDetector, ExponentialFilter
@@ -14,15 +14,20 @@ from monitor.status import PoseController
 from ui.server import start_server
 
 
-def load_config(config_path="config/default.yaml"):
-    if os.path.exists(config_path):
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
-    return {}
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "default.yaml"
+
+
+def load_config(config_path=DEFAULT_CONFIG_PATH):
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        raise FileNotFoundError(f"설정 파일을 찾을 수 없습니다: {config_path}")
+    with config_path.open('r', encoding='utf-8') as f:
+        return yaml.safe_load(f) or {}
 
 
 def main():
-    config = load_config("config/default.yaml")
+    config = load_config()
     controller = PoseController()
 
     server_thread = threading.Thread(target=start_server, args=(controller,), daemon=True)
@@ -30,12 +35,16 @@ def main():
 
     cam_cfg = config.get('camera', {})
     cam_manager = CameraManager(
+        camera_num=cam_cfg.get('device_id', 0),
         width=cam_cfg.get('width', 640),
         height=cam_cfg.get('height', 480)
     )
 
     pose_cfg = config.get('pose', {})
-    detector = PoseDetector(model_type=pose_cfg.get('model', 'thunder'))
+    detector = PoseDetector(
+        model_type=pose_cfg.get('model', 'thunder'),
+        models_dir=PROJECT_ROOT / "models",
+    )
 
     act_cfg = config.get('actuator', {})
     serial_ctrl = SerialController(
@@ -44,16 +53,21 @@ def main():
         enabled=act_cfg.get('enabled', True),
         heartbeat_interval_sec=act_cfg.get('heartbeat_interval_sec', 2.0),
         status_interval_sec=act_cfg.get('status_interval_sec', 1.0),
-        response_timeout_sec=act_cfg.get('response_timeout_sec', 6.0),
+        response_timeout_sec=act_cfg.get('response_timeout_sec', 10.0),
         reconnect_interval_sec=act_cfg.get('reconnect_interval_sec', 2.0),
     )
     controller.attach_serial_controller(serial_ctrl)
 
     filter_neck = ExponentialFilter(alpha=0.3)
     filter_back = ExponentialFilter(alpha=0.3)
-    bad_duration_sec = config.get('posture', {}).get('bad_duration_sec', 60)
+    posture_cfg = config.get('posture', {})
+    bad_duration_sec = posture_cfg.get('bad_duration_sec', 60)
+    normal_restore_delay_sec = posture_cfg.get('normal_restore_delay_sec', 300)
     bad_posture_timer = BadPostureHoldTimer(bad_duration_sec)
-    command_coordinator = PostureCommandCoordinator(serial_ctrl)
+    command_coordinator = PostureCommandCoordinator(
+        serial_ctrl,
+        normal_restore_delay_sec=normal_restore_delay_sec,
+    )
 
     cam_manager.start()
 

@@ -36,7 +36,7 @@ class SerialControllerTest(unittest.TestCase):
             b"DONE CORRECTION TURTLE_NECK\n",
             b"STATUS TILT_MM=5.00 TILT_MODE=0 HEIGHT_MODE=0 "
             b"CORRECTION_TYPE=TURTLE_NECK CORRECTION_PHASE=APPLIED "
-            b"CURRENT=420 ESTOP=0 WATCHDOG_MS=300000\n",
+            b"CURRENT=420 ESTOP=0 WATCHDOG_MS=3000\n",
         ])
         controller = SerialController(
             serial_factory=lambda *args, **kwargs: fake_serial,
@@ -55,7 +55,7 @@ class SerialControllerTest(unittest.TestCase):
         self.assertEqual(status["active_correction"], "TURTLE_NECK")
         self.assertEqual(status["current_sensor"], 420)
         self.assertEqual(status["tilt_mm"], 5.0)
-        self.assertEqual(status["watchdog_timeout_sec"], 300.0)
+        self.assertEqual(status["watchdog_timeout_sec"], 3.0)
         self.assertEqual(fake_serial.writes, [b"H\n", b"STATUS\n"])
 
     def test_connection_requires_a_recent_arduino_response(self):

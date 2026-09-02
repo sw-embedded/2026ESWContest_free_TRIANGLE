@@ -12,6 +12,7 @@ posture:
   head_pitch_threshold_deg: 22.0
   torso_angle_threshold_deg: 15.0
   bad_duration_sec: 60
+  normal_restore_delay_sec: 300
 
 actuator:
   enabled: true
@@ -19,5 +20,5 @@ actuator:
   baudrate: 9600
   heartbeat_interval_sec: 2.0
   status_interval_sec: 1.0
-  response_timeout_sec: 6.0
+  response_timeout_sec: 10.0
   reconnect_interval_sec: 2.0

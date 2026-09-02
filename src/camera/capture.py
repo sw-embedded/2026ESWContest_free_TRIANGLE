@@ -1,8 +1,8 @@
 from picamera2 import Picamera2
 
 class CameraManager:
-    def __init__(self, width=640, height=480):
-        self.picam2 = Picamera2()
+    def __init__(self, camera_num=0, width=640, height=480):
+        self.picam2 = Picamera2(camera_num=camera_num)
         config = self.picam2.create_preview_configuration(main={"size": (width, height), "format": "RGB888"})
         self.picam2.configure(config)
 

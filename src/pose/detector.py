@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -8,8 +10,11 @@ except ImportError:
         import tflite_runtime.interpreter as tflite
         Interpreter = tflite.Interpreter
     except ImportError:
-        import tensorflow.lite as tflite
-        Interpreter = tflite.Interpreter
+        try:
+            import tensorflow.lite as tflite
+            Interpreter = tflite.Interpreter
+        except ImportError:
+            Interpreter = None
 
 
 class ExponentialFilter:
@@ -26,18 +31,65 @@ class ExponentialFilter:
 
 
 class PoseDetector:
-    def __init__(self, model_type="thunder"):
-        model_path = f"models/movenet_singlepose_{model_type}.tflite"
+    SUPPORTED_MODELS = frozenset({"thunder", "lightning"})
+
+    def __init__(self, model_type="thunder", models_dir=None):
+        if Interpreter is None:
+            raise RuntimeError(
+                "TFLite interpreter가 없습니다. requirements/raspberrypi.txt의 "
+                "ai-edge-litert를 설치하세요."
+            )
+
+        model_type = str(model_type).strip().lower()
+        if model_type not in self.SUPPORTED_MODELS:
+            supported = ", ".join(sorted(self.SUPPORTED_MODELS))
+            raise ValueError(
+                f"지원하지 않는 MoveNet 모델 종류입니다: {model_type!r} "
+                f"(지원: {supported})"
+            )
+
+        if models_dir is None:
+            models_dir = Path(__file__).resolve().parents[2] / "models"
+        model_path = Path(models_dir) / f"movenet_singlepose_{model_type}.tflite"
+        if not model_path.is_file():
+            raise FileNotFoundError(
+                "MoveNet 모델 파일을 찾을 수 없습니다: "
+                f"{model_path}. models/README.md의 준비 방법을 확인하세요."
+            )
+
         try:
-            self.interpreter = Interpreter(model_path=model_path)
-        except Exception:
-            fallback_path = "models/movenet_singlepose_lightning.tflite"
-            self.interpreter = Interpreter(model_path=fallback_path)
+            self.interpreter = Interpreter(model_path=str(model_path))
+        except Exception as exc:
+            raise RuntimeError(
+                f"MoveNet 모델을 불러오지 못했습니다: {model_path}"
+            ) from exc
 
         self.interpreter.allocate_tensors()
         self.input_details = self.interpreter.get_input_details()
         self.output_details = self.interpreter.get_output_details()
-        self.input_size = self.input_details[0]['shape'][1]
+        input_shape = tuple(int(value) for value in self.input_details[0]['shape'])
+        if (
+            len(input_shape) != 4
+            or input_shape[0] != 1
+            or input_shape[1] != input_shape[2]
+            or input_shape[3] != 3
+        ):
+            raise ValueError(
+                "예상하지 못한 MoveNet 입력 텐서 형태입니다: "
+                f"{input_shape} (예상: (1, size, size, 3))"
+            )
+        self.input_size = input_shape[1]
+        self.model_type = model_type
+        self.model_path = model_path
+
+        output_shape = tuple(
+            int(value) for value in self.output_details[0]['shape']
+        )
+        if output_shape != (1, 1, 17, 3):
+            raise ValueError(
+                "예상하지 못한 MoveNet 출력 텐서 형태입니다: "
+                f"{output_shape} (예상: (1, 1, 17, 3))"
+            )
 
     def preprocess_letterbox(self, img):
         h, w, _ = img.shape

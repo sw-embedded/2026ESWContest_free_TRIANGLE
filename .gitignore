@@ -224,13 +224,19 @@ config/local.yaml
 # 실행 결과
 outputs/
 logs/
+tmp/
 *.log
+*.tmp
+*.bak
+*~
 
 # 촬영 데이터
 data/raw/
 recordings/
 *.mp4
 *.avi
+*.mov
+*.mkv
 
 # 개발 환경
 .venv/

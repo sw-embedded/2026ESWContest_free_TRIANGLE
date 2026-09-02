@@ -10,7 +10,6 @@ class ArduinoState:
             "arduino_connected": False,
             "correction_phase": "IDLE",
             "active_correction": "NONE",
-            "restore_remaining_sec": None,
             "emergency_stop": False,
             "current_sensor": None,
             "tilt_mm": None,

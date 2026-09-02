@@ -9,7 +9,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>스마트 책상 모니터링</title>
+    <title>스마트 자세 교정 데스크 시스템</title>
     <style>
         body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; text-align: center; }
         .card { max-width: 560px; margin: 20px auto; background: white; border-radius: 16px; padding: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
@@ -44,7 +44,7 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="card">
-        <h1>스마트 책상 실시간 자세 모니터링</h1>
+        <h1>스마트 자세 교정 데스크 시스템</h1>
         <div id="badge" class="status-badge NORMAL">
             <span id="pose-text">NORMAL</span>
         </div>
@@ -194,7 +194,6 @@ def get_status():
             "back_angle": 0,
             "correction_phase": "IDLE",
             "active_correction": "NONE",
-            "restore_remaining_sec": None,
             "arduino_connected": False,
             "emergency_stop": False,
             "current_sensor": None,
