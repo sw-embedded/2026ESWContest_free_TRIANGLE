@@ -95,17 +95,17 @@ MoveNet 좌표를 원본 프레임 좌표로 되돌릴 때 사용합니다. 모�
 귀·어깨·골반 신뢰도 합을 비교하고 더 선명하게 인식된 쪽을 선택합니다. 귀와
 어깨 신뢰도가 `min_visibility`보다 낮으면 `POSE_LOST`로 처리합니다.
 
-선택한 측면의 귀 좌표를 \(E=(E_x,E_y)\), 어깨 좌표를
-\(S=(S_x,S_y)\), 골반 좌표를 \(H=(H_x,H_y)\)라고 정의합니다. 영상 좌표계는
+선택한 측면의 귀 좌표를 $E=(E_x,E_y)$, 어깨 좌표를
+$S=(S_x,S_y)$, 골반 좌표를 $H=(H_x,H_y)$라고 정의합니다. 영상 좌표계는
 오른쪽이 +x, 아래쪽이 +y 방향입니다.
 
 거북목 판정에는 귀와 어깨의 상대 위치로 구한 CVA 기반 전방 목 기울기
-\(\theta_{neck}\)를 사용합니다.
+$\theta_{neck}$를 사용합니다.
 
 ```math
 \theta_{neck}
 = \max\left(0,
-\operatorname{atan2}\left(E_x-S_x,\;S_y-E_y\right)
+\mathrm{atan2}\left(E_x-S_x,\;S_y-E_y\right)
 \times \frac{180}{\pi}\right)
 ```
 
@@ -115,11 +115,11 @@ MoveNet 좌표를 원본 프레임 좌표로 되돌릴 때 사용합니다. 모�
 유효한 전방 기울기로 보지 않고 0°로 처리합니다.
 
 굽은 등 판정에는 어깨와 골반을 연결한 몸통 중심선이 수직선에서 벗어난 각도
-\(\theta_{back}\)를 사용합니다.
+$\theta_{back}$를 사용합니다.
 
 ```math
 \theta_{back}
-= \operatorname{atan2}\left(\left|H_x-S_x\right|,
+= \mathrm{atan2}\left(\left|H_x-S_x\right|,
 \left|H_y-S_y\right|\right)
 \times \frac{180}{\pi}
 ```
