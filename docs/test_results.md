@@ -6,7 +6,7 @@
 ## 성공한 검사
 
 - Python `compileall`: `src`, `scripts`, `tests` 문법 검사 성공
-- Python 단위 테스트: 25개 중 24개 성공, 1개 Flask 미설치로 skip
+- Python 단위 테스트: 26개 중 25개 성공, 1개 Flask 미설치로 skip
 - 하드웨어/영상 의존성이 없는 actuator, posture, monitor 모듈 import 성공
 - Raspberry Pi-Arduino 명령 정적 대조:
   - 9600 baud 일치

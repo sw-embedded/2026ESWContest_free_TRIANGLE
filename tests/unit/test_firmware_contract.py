@@ -37,6 +37,12 @@ class FirmwareContractTest(unittest.TestCase):
             r"const unsigned long COMMAND_WATCHDOG_MS\s*=\s*3UL \* 1000UL;",
         )
 
+    def test_automatic_turtle_neck_correction_moves_forty_millimeters(self):
+        self.assertRegex(
+            self.source,
+            r"const float AUTO_TILT_DELTA_MM\s*=\s*40\.0f;",
+        )
+
     def test_emergency_stop_is_checked_before_and_during_motion(self):
         self.assertGreaterEqual(
             len(re.findall(re.escape("emergencyStopActive()"), self.source)),

@@ -46,7 +46,7 @@ const uint8_t TILT_UP_DIR_LEVEL = HIGH;
 // 실제 기구에서 보수적으로 실측·보정해야 하는 값이다.
 const float TILT_MAX_TRAVEL_MM = 100.0f;
 const float TILT_SPEED_MM_PER_SEC = 4.0f;
-const float AUTO_TILT_DELTA_MM = 5.0f;
+const float AUTO_TILT_DELTA_MM = 40.0f;
 const unsigned long AUTO_TILT_UP_MS = 10000UL;
 const unsigned long AUTO_TILT_DOWN_MS = 6000UL;
 const unsigned long AUTO_HEIGHT_UP_MS = 4000UL;
